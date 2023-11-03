@@ -2,22 +2,23 @@ use regex::Regex;
 use std::{collections, fs, path, str};
 use uuid::Uuid;
 
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct Vector2 {
     pub x: f32,
     pub y: f32,
 }
 
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct Vector3 {
     pub x: f32,
     pub y: f32,
     pub z: f32,
 }
 
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub enum Attribute {
     Unknown,
+    ElementId(usize),
     Element(DmElement),
     Int(i32),
     Float(f32),
@@ -32,6 +33,7 @@ pub enum Attribute {
     QAngle { x: f32, y: f32, z: f32 },
     Quaternion { x: f32, y: f32, z: f32, w: f32 },
     Matrix([f32; 16]),
+    ElementIdArray(Vec<usize>),
     ElementArray(Vec<DmElement>),
     IntArray(Vec<i32>),
     FloatArray(Vec<f32>),
@@ -48,21 +50,23 @@ pub enum Attribute {
     MatrixArray(Vec<[f32; 16]>),
 }
 
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct DmElement {
     id: Uuid,
     element_name: String,
     name: String,
     attribute: collections::HashMap<String, Attribute>,
+    elements: Vec<Attribute>,
 }
 
 impl DmElement {
-    fn new(element_name: String, name: String) -> Self {
+    pub fn new(element_name: String, name: String, id: Option<Uuid>) -> Self {
         Self {
-            id: Uuid::new_v4(),
+            id: id.unwrap_or(Uuid::new_v4()),
             element_name,
             name,
             attribute: collections::HashMap::new(),
+            elements: Vec::new(),
         }
     }
 
@@ -79,7 +83,24 @@ impl DmElement {
     }
 
     pub fn get_attribute(&self, name: &str) -> Option<&Attribute> {
-        self.attribute.get(name)
+        let attribute = self.attribute.get(name);
+
+        if let Some(Attribute::ElementId(index)) = attribute {
+            return self.elements.get(*index);
+        }
+
+        // TODO: Make get attribute support returning a element array
+        // if let Some(Attribute::ElementIdArray(indexes)) = attribute {
+        //     let elements: Vec<DmElement> = Vec::new();
+        //     for index in indexes {
+        //         let element = self.elements.get(*index).unwrap();
+
+        //     }
+
+        //     return Some(&Attribute::ElementArray(elements));
+        // }
+
+        attribute
     }
 
     pub fn set_name(&mut self, name: String) {
@@ -91,18 +112,43 @@ impl DmElement {
     }
 
     pub fn add_attribute(&mut self, name: String, attribute: Attribute) {
+        if let Attribute::Element(element) = attribute {
+            let index = self.add_element(element);
+            let element_attribute = Attribute::ElementId(index);
+            self.attribute.insert(name, element_attribute);
+            return;
+        }
+
+        if let Attribute::ElementArray(mut elements) = attribute {
+            let mut element_attribute: Vec<usize> = Vec::new();
+
+            for element in elements.drain(..) {
+                let index = self.add_element(element);
+                element_attribute.push(index);
+            }
+
+            self.attribute.insert(name, Attribute::ElementIdArray(element_attribute));
+            return;
+        }
+
         self.attribute.insert(name, attribute);
+    }
+
+    fn add_element(&mut self, element: DmElement) -> usize {
+        self.elements.push(Attribute::Element(element));
+        self.elements.len()
     }
 }
 
-pub struct DmxHeader {
+#[derive(Clone, Debug)]
+pub struct DmHeader {
     pub encoding_name: String,
     pub encoding_version: i32,
     pub format_name: String,
     pub format_version: i32,
 }
 
-impl DmxHeader {
+impl DmHeader {
     const MAX_HEADER_LENGTH: usize = 168;
 
     fn from_bytes(data: &[u8]) -> Result<Self, String> {
@@ -141,6 +187,55 @@ impl DmxHeader {
     }
 }
 
+struct DataBufferReader {
+    data: Vec<u8>,
+    index: usize,
+}
+
+impl DataBufferReader {
+    fn new(data: Vec<u8>) -> Self {
+        Self { data, index: 0 }
+    }
+    // FIXME: Throw error if there is not eough bytes to read from!
+    fn read_string(&mut self) -> &str {
+        let start = self.index;
+        loop {
+            let byte = self.read_byte();
+            if byte == 0 {
+                break;
+            }
+        }
+        str::from_utf8(&self.data[start..self.index - 1]).unwrap()
+    }
+
+    fn read_byte(&mut self) -> u8 {
+        let byte = self.data[self.index];
+        self.index += 1;
+        byte
+    }
+
+    fn read_int(&mut self) -> i32 {
+        let mut bytes = [0; 4];
+        bytes.copy_from_slice(&self.data[self.index..self.index + 4]);
+        self.index += 4;
+        i32::from_le_bytes(bytes)
+    }
+
+    fn read_float(&mut self) -> f32 {
+        let mut bytes = [0; 4];
+        bytes.copy_from_slice(&self.data[self.index..self.index + 4]);
+        self.index += 4;
+        f32::from_le_bytes(bytes)
+    }
+
+    fn read_id(&mut self) -> Uuid {
+        let mut bytes = [0; 16];
+        bytes.copy_from_slice(&self.data[self.index..self.index + 16]);
+        self.index += 16;
+        Uuid::from_bytes_le(bytes)
+    }
+}
+
 trait Serializer {
     fn serialize(&self, root: DmElement, format_name: String, format_version: i32) -> Result<Vec<u8>, String>;
     fn unserialize(&self, data: Vec<u8>, encoding_version: i32) -> Result<DmElement, String>;
@@ -163,7 +258,7 @@ impl Serializer for BinaraySerializer {
         let header_data = data_buffer.read_string();
 
         // Should we do something with this? Should we valate that its binaray and correct version?
-        let _ = DmxHeader::from_string(header_data)?;
+        let _header = DmHeader::from_string(header_data)?;
 
         let element_count = data_buffer.read_int();
 
@@ -173,9 +268,9 @@ impl Serializer for BinaraySerializer {
         for _ in 0..element_count {
             let element_type = data_buffer.read_string().to_string();
             let element_name = data_buffer.read_string().to_string();
-            data_buffer.read_id();
+            let element_id = data_buffer.read_id();
 
-            let element = DmElement::new(element_type, element_name);
+            let element = DmElement::new(element_type, element_name, Some(element_id));
 
             elements.push(element);
         }
@@ -193,10 +288,8 @@ impl Serializer for BinaraySerializer {
                 // Is there a better way to do this?
                 match attribute_type {
                     1 => {
-                        let element_index = data_buffer.read_int();
-                        // FIXME: Element attributes are cloned so they don't get the attributes saved to them.
-                        let attribute_element = elements.get(element_index as usize).unwrap().clone();
-                        attributes.insert(attribute_name, Attribute::Element(attribute_element));
+                        let element_data_index = data_buffer.read_int();
+                        attributes.insert(attribute_name, Attribute::ElementId(element_data_index as usize - 1));
                     }
                     2 => {
                         let attribute_data = data_buffer.read_int();
@@ -320,16 +413,14 @@ impl Serializer for BinaraySerializer {
                     }
                     15 => {
                         let attribute_array_count = data_buffer.read_int();
-                        let mut attribute_data: Vec<DmElement> = Vec::new();
-                        attribute_data.reserve(attribute_array_count as usize);
+                        let mut attribute_data: Vec<usize> = Vec::new();
 
                         for _ in 0..attribute_array_count {
-                            let element_index = data_buffer.read_int();
-                            let attribute_element = elements.get(element_index as usize).unwrap().clone();
-                            attribute_data.push(attribute_element);
+                            let element_data_index = data_buffer.read_int();
+                            attribute_data.push(element_data_index as usize - 1);
                         }
 
-                        attributes.insert(attribute_name, Attribute::ElementArray(attribute_data));
+                        attributes.insert(attribute_name, Attribute::ElementIdArray(attribute_data));
                     }
                     16 => {
                         let attribute_array_count = data_buffer.read_int();
@@ -469,20 +560,18 @@ impl Serializer for BinaraySerializer {
             element.attribute.extend(attributes);
         }
 
-        Ok(elements.get(0).unwrap().clone())
+        let mut root = elements.remove(0);
+
+        root.elements.append(&mut elements.into_iter().map(Attribute::Element).collect());
+
+        Ok(root)
     }
 }
 
-enum Serializers {
-    Binary(BinaraySerializer),
-}
-
-impl Serializers {
-    fn from_string(name: &str) -> Option<Box<dyn Serializer>> {
-        match name {
-            "binary" => Some(Box::new(BinaraySerializer {})),
-            _ => None,
-        }
+fn get_serializer(header: &DmHeader) -> Result<Box<dyn Serializer>, String> {
+    match header.encoding_name.as_str() {
+        "binary" => Ok(Box::new(BinaraySerializer {})),
+        _ => Err("Not Supported encoding!".to_string()),
     }
 }
 
@@ -490,58 +579,9 @@ impl Serializers {
 pub fn load_from_file<P: AsRef<path::Path>>(path: P) -> Result<DmElement, String> {
     let file_data = fs::read(path).unwrap(); // TODO: Validate the file exist and handle any read errors.
 
-    let header = DmxHeader::from_bytes(&file_data)?;
+    let header = DmHeader::from_bytes(&file_data)?;
 
-    let serializer = Serializers::from_string(&header.encoding_name).unwrap(); // TODO: Handle this case
+    let serializer = get_serializer(&header)?;
 
     serializer.unserialize(file_data, header.encoding_version)
-}
-
-struct DataBufferReader {
-    data: Vec<u8>,
-    index: usize,
-}
-
-impl DataBufferReader {
-    fn new(data: Vec<u8>) -> Self {
-        Self { data, index: 0 }
-    }
-    // FIXME: Throw error if there is not eough bytes to read from!
-    fn read_string(&mut self) -> &str {
-        let start = self.index;
-        loop {
-            let byte = self.read_byte();
-            if byte == 0 {
-                break;
-            }
-        }
-        str::from_utf8(&self.data[start..self.index - 1]).unwrap()
-    }
-
-    fn read_byte(&mut self) -> u8 {
-        let byte = self.data[self.index];
-        self.index += 1;
-        byte
-    }
-
-    fn read_int(&mut self) -> i32 {
-        let mut bytes = [0; 4];
-        bytes.copy_from_slice(&self.data[self.index..self.index + 4]);
-        self.index += 4;
-        i32::from_le_bytes(bytes)
-    }
-
-    fn read_float(&mut self) -> f32 {
-        let mut bytes = [0; 4];
-        bytes.copy_from_slice(&self.data[self.index..self.index + 4]);
-        self.index += 4;
-        f32::from_le_bytes(bytes)
-    }
-
-    fn read_id(&mut self) -> Uuid {
-        let mut bytes = [0; 16];
-        bytes.copy_from_slice(&self.data[self.index..self.index + 16]);
-        self.index += 16;
-        Uuid::from_bytes_le(bytes)
-    }
 }
