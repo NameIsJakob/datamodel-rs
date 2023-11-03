@@ -2,6 +2,13 @@
 name = "datamodel"
 version = "0.1.0"
 edition = "2021"
+authors = ["Jakobg1215"]
+description = "A rust library to serialize and deserialize Valve's proprietary DMX file format."
+repository = "https://github.com/Jakobg1215/datamodel-rs/"
+license = "MIT"
+keywords = ["valve", "source-engine", "datamodel"]
+readme = "README.md"
+exclude = ["*.dmx"]
 
 [dependencies]
 regex = "1.10.2"
