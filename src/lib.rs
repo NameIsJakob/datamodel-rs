@@ -1,5 +1,5 @@
 use regex::Regex;
-use std::{collections, fs, path, str};
+use std::{cell::RefCell, collections::HashMap, fs, path, rc::Rc, str};
 use uuid::Uuid;
 
 #[derive(Clone, Debug)]
@@ -16,62 +16,74 @@ pub struct Vector3 {
 }
 
 #[derive(Clone, Debug)]
+pub struct Vector4 {
+    pub x: f32,
+    pub y: f32,
+    pub z: f32,
+    pub w: f32,
+}
+
+#[derive(Clone, Debug)]
+pub struct Color {
+    pub r: u8,
+    pub g: u8,
+    pub b: u8,
+    pub a: u8,
+}
+
+#[derive(Clone, Debug)]
 pub enum Attribute {
     Unknown,
-    ElementId(usize),
-    Element(DmElement),
+    Element(Rc<DmElement>),
     Int(i32),
     Float(f32),
     Bool(bool),
     String(String),
     Void(Vec<u8>),
     ObjectId(Uuid),
-    Color { r: u8, g: u8, b: u8, a: u8 },
+    Color(Color),
     Vector2(Vector2),
     Vector3(Vector3),
-    Vector4 { x: f32, y: f32, z: f32, w: f32 },
-    QAngle { x: f32, y: f32, z: f32 },
-    Quaternion { x: f32, y: f32, z: f32, w: f32 },
+    Vector4(Vector4),
+    QAngle(Vector3),
+    Quaternion(Vector4),
     Matrix([f32; 16]),
-    ElementIdArray(Vec<usize>),
-    ElementArray(Vec<DmElement>),
+    ElementArray(Vec<Rc<DmElement>>),
     IntArray(Vec<i32>),
     FloatArray(Vec<f32>),
     BoolArray(Vec<bool>),
     StringArray(Vec<String>),
     VoidArray(Vec<Vec<u8>>),
     ObjectIdArray(Vec<Uuid>),
-    ColorArray(Vec<Attribute>),
+    ColorArray(Vec<Color>),
     Vector2Array(Vec<Vector2>),
     Vector3Array(Vec<Vector3>),
-    Vector4Array(Vec<Attribute>),
-    QAngleArray(Vec<Attribute>),
-    QuaternionArray(Vec<Attribute>),
+    Vector4Array(Vec<Vector4>),
+    QAngleArray(Vec<Vector3>),
+    QuaternionArray(Vec<Vector4>),
     MatrixArray(Vec<[f32; 16]>),
 }
 
 #[derive(Clone, Debug)]
 pub struct DmElement {
-    id: Uuid,
     element_name: String,
-    name: String,
-    attribute: collections::HashMap<String, Attribute>,
-    elements: Vec<Attribute>,
+    id: Uuid,
+    name: RefCell<String>,
+    attribute: RefCell<HashMap<String, Attribute>>,
 }
 
 impl DmElement {
     pub fn new(element_name: String, name: String, id: Option<Uuid>) -> Self {
         Self {
-            id: id.unwrap_or(Uuid::new_v4()),
             element_name,
-            name,
-            attribute: collections::HashMap::new(),
-            elements: Vec::new(),
+            id: id.unwrap_or(Uuid::new_v4()),
+            name: RefCell::new(name),
+            attribute: RefCell::new(HashMap::new()),
         }
     }
 
-    pub fn get_name(&self) -> &str {
-        &self.name
+    pub fn get_name(&self) -> String {
+        self.name.borrow().clone()
     }
 
     pub fn get_id(&self) -> &Uuid {
@@ -82,29 +94,12 @@ impl DmElement {
         &self.element_name
     }
 
-    pub fn get_attribute(&self, name: &str) -> Option<&Attribute> {
-        let attribute = self.attribute.get(name);
-
-        if let Some(Attribute::ElementId(index)) = attribute {
-            return self.elements.get(*index);
-        }
-
-        // TODO: Make get attribute support returning a element array
-        // if let Some(Attribute::ElementIdArray(indexes)) = attribute {
-        //     let elements: Vec<DmElement> = Vec::new();
-        //     for index in indexes {
-        //         let element = self.elements.get(*index).unwrap();
-
-        //     }
-
-        //     return Some(&Attribute::ElementArray(elements));
-        // }
-
-        attribute
+    pub fn get_attribute(&self, name: &str) -> Option<Attribute> {
+        self.attribute.borrow().get(name).cloned()
     }
 
     pub fn set_name(&mut self, name: String) {
-        self.name = name
+        *self.name.borrow_mut() = name
     }
 
     pub fn set_id(&mut self, id: Uuid) {
@@ -112,31 +107,7 @@ impl DmElement {
     }
 
     pub fn add_attribute(&mut self, name: String, attribute: Attribute) {
-        if let Attribute::Element(element) = attribute {
-            let index = self.add_element(element);
-            let element_attribute = Attribute::ElementId(index);
-            self.attribute.insert(name, element_attribute);
-            return;
-        }
-
-        if let Attribute::ElementArray(mut elements) = attribute {
-            let mut element_attribute: Vec<usize> = Vec::new();
-
-            for element in elements.drain(..) {
-                let index = self.add_element(element);
-                element_attribute.push(index);
-            }
-
-            self.attribute.insert(name, Attribute::ElementIdArray(element_attribute));
-            return;
-        }
-
-        self.attribute.insert(name, attribute);
-    }
-
-    fn add_element(&mut self, element: DmElement) -> usize {
-        self.elements.push(Attribute::Element(element));
-        self.elements.len()
+        self.attribute.borrow_mut().insert(name, attribute);
     }
 }
 
@@ -237,32 +208,31 @@ impl DataBufferReader {
 }
 
 trait Serializer {
-    fn serialize(&self, root: DmElement, format_name: String, format_version: i32) -> Result<Vec<u8>, String>;
-    fn unserialize(&self, data: Vec<u8>, encoding_version: i32) -> Result<DmElement, String>;
+    fn serialize(&self, root: &DmElement, header: &DmHeader) -> Result<Vec<u8>, String>;
+    fn unserialize(&self, data: Vec<u8>) -> Result<DmElement, String>;
 }
 
 struct BinaraySerializer {}
 
 impl Serializer for BinaraySerializer {
-    fn serialize(&self, root: DmElement, format_name: String, format_version: i32) -> Result<Vec<u8>, String> {
+    fn serialize(&self, root: &DmElement, header: &DmHeader) -> Result<Vec<u8>, String> {
         todo!("Implement the serialize for Binaray!")
     }
 
-    fn unserialize(&self, data: Vec<u8>, encoding_version: i32) -> Result<DmElement, String> {
-        if encoding_version != 1 {
-            return Err("Not Supported encoding version!".to_string());
-        }
-
+    fn unserialize(&self, data: Vec<u8>) -> Result<DmElement, String> {
         let mut data_buffer = DataBufferReader::new(data);
 
         let header_data = data_buffer.read_string();
 
-        // Should we do something with this? Should we valate that its binaray and correct version?
-        let _header = DmHeader::from_string(header_data)?;
+        let header = DmHeader::from_string(header_data)?;
+
+        if header.encoding_version != 1 {
+            return Err("Not Supported encoding version!".to_string());
+        }
 
         let element_count = data_buffer.read_int();
 
-        let mut elements: Vec<DmElement> = Vec::new();
+        let mut elements: Vec<Rc<DmElement>> = Vec::new();
         elements.reserve(element_count as usize);
 
         for _ in 0..element_count {
@@ -270,15 +240,15 @@ impl Serializer for BinaraySerializer {
             let element_name = data_buffer.read_string().to_string();
             let element_id = data_buffer.read_id();
 
-            let element = DmElement::new(element_type, element_name, Some(element_id));
+            let element = Rc::new(DmElement::new(element_type, element_name, Some(element_id)));
 
-            elements.push(element);
+            elements.push(Rc::clone(&element));
         }
 
         for element_index in 0..element_count {
             let attribute_count = data_buffer.read_int();
 
-            let mut attributes: collections::HashMap<String, Attribute> = collections::HashMap::new();
+            let mut attributes: HashMap<String, Attribute> = HashMap::new();
 
             for _ in 0..attribute_count {
                 let attribute_name = data_buffer.read_string().to_string();
@@ -289,7 +259,7 @@ impl Serializer for BinaraySerializer {
                 match attribute_type {
                     1 => {
                         let element_data_index = data_buffer.read_int();
-                        attributes.insert(attribute_name, Attribute::ElementId(element_data_index as usize - 1));
+                        attributes.insert(attribute_name, Attribute::Element(Rc::clone(&elements[element_data_index as usize])));
                     }
                     2 => {
                         let attribute_data = data_buffer.read_int();
@@ -322,12 +292,12 @@ impl Serializer for BinaraySerializer {
 
                         attributes.insert(
                             attribute_name,
-                            Attribute::Color {
+                            Attribute::Color(Color {
                                 r: attribute_data_r,
                                 g: attribute_data_g,
                                 b: attribute_data_b,
                                 a: attribute_data_a,
-                            },
+                            }),
                         );
                     }
                     9 => {
@@ -364,12 +334,12 @@ impl Serializer for BinaraySerializer {
 
                         attributes.insert(
                             attribute_name,
-                            Attribute::Vector4 {
+                            Attribute::Vector4(Vector4 {
                                 x: attribute_data_x,
                                 y: attribute_data_y,
                                 z: attribute_data_z,
                                 w: attribute_data_w,
-                            },
+                            }),
                         );
                     }
                     12 => {
@@ -379,11 +349,11 @@ impl Serializer for BinaraySerializer {
 
                         attributes.insert(
                             attribute_name,
-                            Attribute::QAngle {
+                            Attribute::QAngle(Vector3 {
                                 x: attribute_data_x,
                                 y: attribute_data_y,
                                 z: attribute_data_z,
-                            },
+                            }),
                         );
                     }
                     13 => {
@@ -394,12 +364,12 @@ impl Serializer for BinaraySerializer {
 
                         attributes.insert(
                             attribute_name,
-                            Attribute::Quaternion {
+                            Attribute::Quaternion(Vector4 {
                                 x: attribute_data_x,
                                 y: attribute_data_y,
                                 z: attribute_data_z,
                                 w: attribute_data_w,
-                            },
+                            }),
                         );
                     }
                     14 => {
@@ -413,14 +383,14 @@ impl Serializer for BinaraySerializer {
                     }
                     15 => {
                         let attribute_array_count = data_buffer.read_int();
-                        let mut attribute_data: Vec<usize> = Vec::new();
+                        let mut attribute_data: Vec<Rc<DmElement>> = Vec::new();
 
                         for _ in 0..attribute_array_count {
                             let element_data_index = data_buffer.read_int();
-                            attribute_data.push(element_data_index as usize - 1);
+                            attribute_data.push(Rc::clone(&elements[element_data_index as usize]));
                         }
 
-                        attributes.insert(attribute_name, Attribute::ElementIdArray(attribute_data));
+                        attributes.insert(attribute_name, Attribute::ElementArray(attribute_data));
                     }
                     16 => {
                         let attribute_array_count = data_buffer.read_int();
@@ -486,7 +456,25 @@ impl Serializer for BinaraySerializer {
                         attributes.insert(attribute_name, Attribute::ObjectIdArray(attribute_data));
                     }
                     22 => {
-                        todo!()
+                        let attribute_array_count = data_buffer.read_int();
+                        let mut attribute_data: Vec<Color> = Vec::new();
+                        attribute_data.reserve(attribute_array_count as usize);
+
+                        for _ in 0..attribute_array_count {
+                            let attribute_data_x = data_buffer.read_byte();
+                            let attribute_data_y = data_buffer.read_byte();
+                            let attribute_data_z = data_buffer.read_byte();
+                            let attribute_data_w = data_buffer.read_byte();
+
+                            attribute_data.push(Color {
+                                r: attribute_data_x,
+                                g: attribute_data_y,
+                                b: attribute_data_z,
+                                a: attribute_data_w,
+                            });
+                        }
+
+                        attributes.insert(attribute_name, Attribute::ColorArray(attribute_data));
                     }
                     23 => {
                         let attribute_array_count = data_buffer.read_int();
@@ -524,13 +512,65 @@ impl Serializer for BinaraySerializer {
                         attributes.insert(attribute_name, Attribute::Vector3Array(attribute_data));
                     }
                     25 => {
-                        todo!()
+                        let attribute_array_count = data_buffer.read_int();
+                        let mut attribute_data: Vec<Vector4> = Vec::new();
+                        attribute_data.reserve(attribute_array_count as usize);
+
+                        for _ in 0..attribute_array_count {
+                            let attribute_data_x = data_buffer.read_float();
+                            let attribute_data_y = data_buffer.read_float();
+                            let attribute_data_z = data_buffer.read_float();
+                            let attribute_data_w = data_buffer.read_float();
+
+                            attribute_data.push(Vector4 {
+                                x: attribute_data_x,
+                                y: attribute_data_y,
+                                z: attribute_data_z,
+                                w: attribute_data_w,
+                            });
+                        }
+
+                        attributes.insert(attribute_name, Attribute::QuaternionArray(attribute_data));
                     }
                     26 => {
-                        todo!()
+                        let attribute_array_count = data_buffer.read_int();
+                        let mut attribute_data: Vec<Vector3> = Vec::new();
+                        attribute_data.reserve(attribute_array_count as usize);
+
+                        for _ in 0..attribute_array_count {
+                            let attribute_data_x = data_buffer.read_float();
+                            let attribute_data_y = data_buffer.read_float();
+                            let attribute_data_z = data_buffer.read_float();
+
+                            attribute_data.push(Vector3 {
+                                x: attribute_data_x,
+                                y: attribute_data_y,
+                                z: attribute_data_z,
+                            });
+                        }
+
+                        attributes.insert(attribute_name, Attribute::QAngleArray(attribute_data));
                     }
                     27 => {
-                        todo!()
+                        let attribute_array_count = data_buffer.read_int();
+                        let mut attribute_data: Vec<Vector4> = Vec::new();
+                        attribute_data.reserve(attribute_array_count as usize);
+
+                        for _ in 0..attribute_array_count {
+                            let attribute_data_x = data_buffer.read_float();
+                            let attribute_data_y = data_buffer.read_float();
+                            let attribute_data_z = data_buffer.read_float();
+                            let attribute_data_w = data_buffer.read_float();
+
+                            attribute_data.push(Vector4 {
+                                x: attribute_data_x,
+                                y: attribute_data_y,
+                                z: attribute_data_z,
+                                w: attribute_data_w,
+                            });
+                        }
+
+                        attributes.insert(attribute_name, Attribute::QuaternionArray(attribute_data));
                     }
                     28 => {
                         let attribute_array_count = data_buffer.read_int();
@@ -550,21 +590,19 @@ impl Serializer for BinaraySerializer {
                         attributes.insert(attribute_name, Attribute::MatrixArray(attribute_data));
                     }
                     _ => {
-                        todo!("Implement a way to handel unknown attributes!")
+                        attributes.insert(attribute_name, Attribute::Unknown);
                     }
                 }
             }
 
             let element = elements.get_mut(element_index as usize).unwrap();
 
-            element.attribute.extend(attributes);
+            element.attribute.borrow_mut().extend(attributes);
         }
 
-        let mut root = elements.remove(0);
+        let root = elements.remove(0);
 
-        root.elements.append(&mut elements.into_iter().map(Attribute::Element).collect());
-
-        Ok(root)
+        Ok(Rc::try_unwrap(root).unwrap())
     }
 }
 
@@ -583,5 +621,5 @@ pub fn load_from_file<P: AsRef<path::Path>>(path: P) -> Result<DmElement, String
 
     let serializer = get_serializer(&header)?;
 
-    serializer.unserialize(file_data, header.encoding_version)
+    serializer.unserialize(file_data)
 }
