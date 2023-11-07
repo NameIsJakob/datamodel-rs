@@ -126,7 +126,15 @@ impl Serializer for BinaraySerializer {
                         attributes.insert(attribute_name, Attribute::String(attribute_data));
                     }
                     6 => {
-                        todo!()
+                        let attribute_data_length = data_buffer.read_int();
+                        let mut attribute_data: Vec<u8> = Vec::new();
+                        attribute_data.reserve(attribute_data_length as usize);
+
+                        for _ in 0..attribute_data_length {
+                            attribute_data.push(data_buffer.read_byte());
+                        }
+
+                        attributes.insert(attribute_name, Attribute::Void(attribute_data));
                     }
                     7 => {
                         let attribute_data = data_buffer.read_id();
@@ -289,7 +297,23 @@ impl Serializer for BinaraySerializer {
                         attributes.insert(attribute_name, Attribute::StringArray(attribute_data));
                     }
                     20 => {
-                        todo!()
+                        let attribute_array_count = data_buffer.read_int();
+                        let mut attribute_array_data: Vec<Vec<u8>> = Vec::new();
+                        attribute_array_data.reserve(attribute_array_count as usize);
+
+                        for _ in 0..attribute_array_count {
+                            let attribute_data_length = data_buffer.read_int();
+                            let mut attribute_data: Vec<u8> = Vec::new();
+                            attribute_data.reserve(attribute_data_length as usize);
+
+                            for _ in 0..attribute_data_length {
+                                attribute_data.push(data_buffer.read_byte());
+                            }
+
+                            attribute_array_data.push(attribute_data);
+                        }
+
+                        attributes.insert(attribute_name, Attribute::VoidArray(attribute_array_data));
                     }
                     21 => {
                         let attribute_array_count = data_buffer.read_int();
@@ -443,9 +467,6 @@ impl Serializer for BinaraySerializer {
                 }
             }
 
-            // let element = elements.get_mut(element_index as usize).unwrap();
-
-            // element.attribute.borrow_mut().extend(attributes);
             let mut element = elements.get(element_index as usize).unwrap();
 
             for (name, attribute) in attributes.drain() {
