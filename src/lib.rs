@@ -1,12 +1,14 @@
-use regex::Regex;
 use std::{fs, path::Path, str::from_utf8};
+
+use regex::Regex;
 
 mod attribute;
 mod element;
 mod serializing;
 
-use element::DmElement;
-use serializing::get_serializer;
+pub use attribute::{Attribute, Color, Vector2, Vector3, Vector4};
+pub use element::DmElement;
+pub use serializing::get_serializer;
 
 #[derive(Clone, Debug)]
 pub struct DmHeader {
