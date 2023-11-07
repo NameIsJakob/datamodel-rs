@@ -1,8 +1,10 @@
-use std::borrow::BorrowMut;
+use std::{borrow::BorrowMut, collections::HashMap, rc::Rc, str::from_utf8};
 
-use crate::attribute::*;
-use crate::element::*;
-use crate::*;
+use uuid::Uuid;
+
+use crate::attribute::{Attribute, Color, Vector2, Vector3, Vector4};
+use crate::element::DmElement;
+use crate::DmHeader;
 
 struct DataBufferReader {
     data: Vec<u8>,

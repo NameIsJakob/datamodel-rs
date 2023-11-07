@@ -1,13 +1,12 @@
 use regex::Regex;
-use std::{collections::HashMap, fs, path, rc::Rc, str::from_utf8};
-use uuid::Uuid;
+use std::{fs, path::Path, str::from_utf8};
 
 mod attribute;
 mod element;
 mod serializing;
 
-use element::*;
-use serializing::*;
+use element::DmElement;
+use serializing::get_serializer;
 
 #[derive(Clone, Debug)]
 pub struct DmHeader {
@@ -57,7 +56,7 @@ impl DmHeader {
 }
 
 // TODO: Give this a proper error.
-pub fn load_from_file<P: AsRef<path::Path>>(path: P) -> Result<DmElement, String> {
+pub fn load_from_file<P: AsRef<Path>>(path: P) -> Result<DmElement, String> {
     let file_data = fs::read(path).unwrap(); // TODO: Validate the file exist and handle any read errors.
 
     let header = DmHeader::from_bytes(&file_data)?;
