@@ -135,9 +135,7 @@ impl Serializer for BinaraySerializer {
                         let mut attribute_data: Vec<u8> = Vec::new();
                         attribute_data.reserve(attribute_data_length as usize);
 
-                        for _ in 0..attribute_data_length {
-                            attribute_data.push(data_buffer.read_byte()?);
-                        }
+                        attribute_data.extend_from_slice(data_buffer.read_bytes(attribute_data_length as usize)?);
 
                         attributes.insert(attribute_name, Attribute::Void(attribute_data));
                     }
@@ -311,9 +309,7 @@ impl Serializer for BinaraySerializer {
                             let mut attribute_data: Vec<u8> = Vec::new();
                             attribute_data.reserve(attribute_data_length as usize);
 
-                            for _ in 0..attribute_data_length {
-                                attribute_data.push(data_buffer.read_byte()?);
-                            }
+                            attribute_data.extend_from_slice(data_buffer.read_bytes(attribute_data_length as usize)?);
 
                             attribute_array_data.push(attribute_data);
                         }
