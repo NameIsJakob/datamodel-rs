@@ -2,17 +2,21 @@ use std::error::Error;
 use std::fmt;
 use std::fs::read;
 use std::path::Path;
+use std::rc::Rc;
 use std::str::from_utf8;
 
 use regex::Regex;
 
 mod attribute;
 mod element;
+mod serializers;
 mod serializing;
 
 pub use attribute::{Attribute, Color, Vector2, Vector3, Vector4};
 pub use element::DmElement;
+pub use serializers::BinaraySerializer;
 pub use serializing::get_serializer;
+pub use serializing::Serializer;
 
 #[derive(Clone, Debug)]
 pub struct DmHeader {
@@ -88,7 +92,7 @@ impl Error for SerializingError {
     }
 }
 
-pub fn load_from_file<P: AsRef<Path>>(path: P) -> Result<DmElement, SerializingError> {
+pub fn load_from_file<P: AsRef<Path>>(path: P) -> Result<Rc<DmElement>, SerializingError> {
     let file_data = read(path).map_err(SerializingError::from)?;
 
     let header = DmHeader::from_bytes(&file_data)?;

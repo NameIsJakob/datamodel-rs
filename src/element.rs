@@ -1,5 +1,6 @@
-use std::{cell::RefCell, collections::HashMap};
+use std::cell::RefCell;
 
+use indexmap::IndexMap;
 use uuid::Uuid;
 
 use crate::attribute::Attribute;
@@ -9,7 +10,7 @@ pub struct DmElement {
     element_name: String,
     id: Uuid,
     name: RefCell<String>,
-    attribute: RefCell<HashMap<String, Attribute>>,
+    attribute: RefCell<IndexMap<String, Attribute>>,
 }
 
 impl DmElement {
@@ -18,7 +19,7 @@ impl DmElement {
             element_name,
             id: id.unwrap_or(Uuid::new_v4()),
             name: RefCell::new(name),
-            attribute: RefCell::new(HashMap::new()),
+            attribute: RefCell::new(IndexMap::new()),
         }
     }
 
@@ -38,12 +39,12 @@ impl DmElement {
         self.attribute.borrow().get(name).cloned()
     }
 
-    pub fn set_name(&mut self, name: String) {
-        *self.name.borrow_mut() = name
+    pub fn get_all_attributes(&self) -> IndexMap<String, Attribute> {
+        self.attribute.borrow().clone()
     }
 
-    pub fn set_id(&mut self, id: Uuid) {
-        self.id = id
+    pub fn set_name(&self, name: String) {
+        *self.name.borrow_mut() = name
     }
 
     pub fn add_attribute(&self, name: String, attribute: Attribute) {
