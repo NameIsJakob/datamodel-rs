@@ -568,7 +568,10 @@ impl Serializer for BinarySerializer {
                 match attribute_type {
                     1 => {
                         let attribute_data_index = data_buffer.read_int()?;
-                        let attribute_data = *elements.get(attribute_data_index as usize).unwrap().get_id();
+                        let attribute_data = match elements.get(attribute_data_index as usize) {
+                            Some(element) => *element.get_id(),
+                            None => UUID::nil(),
+                        };
 
                         let element = elements.get_mut(element_index as usize).unwrap();
                         element.set_element_by_id(attribute_name, attribute_data);
