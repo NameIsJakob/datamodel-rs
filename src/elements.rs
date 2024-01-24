@@ -104,6 +104,11 @@ impl DmElement {
         self.attributes.insert(name, DMAttribute::ElementArray(elements.collect()));
     }
 
+    /// Set an element attribute with the given name without any element data.
+    pub fn set_null_element(&mut self, name: String) {
+        self.attributes.insert(name, DMAttribute::Element(UUID::nil()));
+    }
+
     #[doc(hidden)]
     pub fn set_element_by_id(&mut self, name: String, id: UUID) {
         self.attributes.insert(name, DMAttribute::Element(id));
