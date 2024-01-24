@@ -11,6 +11,8 @@ use std::{
 mod binary;
 pub use binary::BinarySerializer;
 
+/// The header of a DMX file.
+/// Tells what encoding and version the file is using.
 pub struct DmHeader {
     pub encoding_name: String,
     pub encoding_version: i32,
@@ -67,6 +69,7 @@ pub struct SerializingError {
     details: String,
 }
 
+/// Deserializes a DMX file into a DmElement.
 pub fn deserialize_file<P: AsRef<Path>>(path: P) -> Result<(DmHeader, DmElement), SerializingError> {
     let data = read(path).map_err(SerializingError::from)?;
 
@@ -78,6 +81,7 @@ pub fn deserialize_file<P: AsRef<Path>>(path: P) -> Result<(DmHeader, DmElement)
     }
 }
 
+/// Serializes a DmElement into a DMX file.
 pub fn serialize_file<P: AsRef<Path>>(path: P, root: &DmElement, header: &DmHeader) -> Result<(), SerializingError> {
     let data = match header.encoding_name.as_str() {
         "binary" => BinarySerializer::serialize(root, header)?,
