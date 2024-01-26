@@ -32,10 +32,10 @@ impl Element for DmElement {
 
 impl DmElement {
     /// Create a new DmElement with the given class and name.
-    pub fn new(class: String, name: String) -> Self {
+    pub fn new<S: Into<String>>(class: S, name: S) -> Self {
         Self {
-            class,
-            name,
+            class: class.into(),
+            name: name.into(),
             id: UUID::new_v4(),
             elements: IndexMap::new(),
             attributes: IndexMap::new(),
@@ -54,9 +54,9 @@ impl DmElement {
     }
 
     /// Get the element with the given name and type.
-    pub fn get_element<T: Element>(&self, name: &str) -> Option<&T> {
+    pub fn get_element<T: Element, S: AsRef<str>>(&self, name: S) -> Option<&T> {
         self.attributes
-            .get(name)
+            .get(name.as_ref())
             .and_then(|attr| match attr {
                 DMAttribute::Element(id) => self.elements.get(id),
                 _ => None,
@@ -65,9 +65,9 @@ impl DmElement {
     }
 
     /// Get the element arry with the given name and type.
-    pub fn get_element_array<T: Element>(&self, name: &str) -> Option<Vec<&T>> {
+    pub fn get_element_array<T: Element, S: AsRef<str>>(&self, name: S) -> Option<Vec<&T>> {
         self.attributes
-            .get(name)
+            .get(name.as_ref())
             .and_then(|attr| match attr {
                 DMAttribute::ElementArray(ids) => Some(ids),
                 _ => None,
@@ -86,14 +86,14 @@ impl DmElement {
     }
 
     /// Set an element attribute with the given name and element.
-    pub fn set_element<T: Element>(&mut self, name: String, value: T) {
+    pub fn set_element<T: Element, S: Into<String>>(&mut self, name: S, value: T) {
         let element = value.get_element();
-        self.attributes.insert(name, DMAttribute::Element(element.id));
+        self.attributes.insert(name.into(), DMAttribute::Element(element.id));
         self.elements.insert(element.id, element);
     }
 
     /// Set an element array attribute with the given name and elements.
-    pub fn set_element_array<T: Element>(&mut self, name: String, value: Vec<T>) {
+    pub fn set_element_array<T: Element, S: Into<String>>(&mut self, name: S, value: Vec<T>) {
         let elements = value.into_iter().map(|element| {
             let element = element.get_element();
             let element_id = element.id;
@@ -101,12 +101,12 @@ impl DmElement {
             element_id
         });
 
-        self.attributes.insert(name, DMAttribute::ElementArray(elements.collect()));
+        self.attributes.insert(name.into(), DMAttribute::ElementArray(elements.collect()));
     }
 
     /// Set an element attribute with the given name without any element data.
-    pub fn set_null_element(&mut self, name: String) {
-        self.attributes.insert(name, DMAttribute::Element(UUID::nil()));
+    pub fn set_null_element<S: Into<String>>(&mut self, name: S) {
+        self.attributes.insert(name.into(), DMAttribute::Element(UUID::nil()));
     }
 
     #[doc(hidden)]
@@ -140,7 +140,7 @@ impl DmElement {
     }
 
     /// Remove an element attribute with the given name.
-    pub fn remove_element(&mut self, name: &str) {
+    pub fn remove_element<S: AsRef<str>>(&mut self, name: S) {
         self.remove_attribute(name)
     }
 
@@ -155,13 +155,13 @@ impl DmElement {
     }
 
     /// Set an attribute with the given name and value.
-    pub fn set_attribute<T: Attribute>(&mut self, name: String, value: T) {
-        self.attributes.insert(name, value.to_attribute());
+    pub fn set_attribute<T: Attribute, S: Into<String>>(&mut self, name: S, value: T) {
+        self.attributes.insert(name.into(), value.to_attribute());
     }
 
     /// Remove an attribute with the given name.
-    pub fn remove_attribute(&mut self, name: &str) {
-        let removed = self.attributes.shift_remove(name);
+    pub fn remove_attribute<S: AsRef<str>>(&mut self, name: S) {
+        let removed = self.attributes.shift_remove(name.as_ref());
         if let Some(DMAttribute::Element(id)) = removed {
             self.elements.shift_remove(&id);
         }
@@ -171,16 +171,16 @@ impl DmElement {
         &self.class
     }
 
-    pub fn set_class(&mut self, class: String) {
-        self.class = class;
+    pub fn set_class<S: Into<String>>(&mut self, class: S) {
+        self.class = class.into();
     }
 
     pub fn get_name(&self) -> &str {
         &self.name
     }
 
-    pub fn set_name(&mut self, name: String) {
-        self.name = name;
+    pub fn set_name<S: Into<String>>(&mut self, name: S) {
+        self.name = name.into();
     }
 
     pub fn get_id(&self) -> &UUID {
