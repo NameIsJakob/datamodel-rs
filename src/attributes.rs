@@ -8,10 +8,12 @@ pub trait Attribute {
         Self: Sized;
 }
 
+#[derive(Clone, Debug)]
 pub struct Binary {
     pub data: Vec<u8>,
 }
 
+#[derive(Clone, Debug)]
 pub struct Color {
     pub r: u8,
     pub g: u8,
@@ -19,17 +21,20 @@ pub struct Color {
     pub a: u8,
 }
 
+#[derive(Clone, Debug)]
 pub struct Vector2 {
     pub x: f32,
     pub y: f32,
 }
 
+#[derive(Clone, Debug)]
 pub struct Vector3 {
     pub x: f32,
     pub y: f32,
     pub z: f32,
 }
 
+#[derive(Clone, Debug)]
 pub struct Vector4 {
     pub x: f32,
     pub y: f32,
@@ -37,12 +42,14 @@ pub struct Vector4 {
     pub w: f32,
 }
 
+#[derive(Clone, Debug)]
 pub struct QAngle {
     pub x: f32,
     pub y: f32,
     pub z: f32,
 }
 
+#[derive(Clone, Debug)]
 pub struct Quaternion {
     pub x: f32,
     pub y: f32,
@@ -50,10 +57,12 @@ pub struct Quaternion {
     pub w: f32,
 }
 
+#[derive(Clone, Debug)]
 pub struct Matrix {
     pub entries: [f32; 16],
 }
 
+#[derive(Clone, Debug)]
 pub enum DMAttribute {
     Element(UUID),
     Int(i32),

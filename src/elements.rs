@@ -5,13 +5,16 @@ use uuid::Uuid as UUID;
 /// A trait to allow structs to be converted into a DmElement.
 pub trait Element {
     /// Return an element representation of the struct.
-    fn get_element(self) -> DmElement;
+    fn to_element(self) -> DmElement;
 
     /// Return a representation of a struct from an element.
-    fn from_element(value: &DmElement) -> &Self;
+    fn from_element(value: &DmElement) -> Option<Self>
+    where
+        Self: Sized;
 }
 
 /// The main struct for storing data in a DMX file.
+#[derive(Clone, Debug)]
 pub struct DmElement {
     class: String,
     name: String,
@@ -21,12 +24,13 @@ pub struct DmElement {
 }
 
 impl Element for DmElement {
-    fn get_element(self) -> DmElement {
+    fn to_element(self) -> DmElement {
         self
     }
 
-    fn from_element(value: &DmElement) -> &Self {
-        value
+    fn from_element(value: &DmElement) -> Option<Self> {
+        // TODO: Can this be done without cloning?
+        Some(value.clone())
     }
 }
 
@@ -54,28 +58,29 @@ impl DmElement {
     }
 
     /// Get the element with the given name and type.
-    pub fn get_element<T: Element, S: AsRef<str>>(&self, name: S) -> Option<&T> {
+    pub fn get_element<T: Element, S: AsRef<str>>(&self, name: S) -> Option<T> {
         self.attributes
             .get(name.as_ref())
-            .and_then(|attr| match attr {
-                DMAttribute::Element(id) => self.elements.get(id),
+            .and_then(|attribute| match attribute {
+                DMAttribute::Element(id) => Some(id),
                 _ => None,
             })
-            .map(|element| T::from_element(element))
+            .and_then(|id| self.elements.get(id))
+            .and_then(|element| T::from_element(element))
     }
 
     /// Get the element arry with the given name and type.
-    pub fn get_element_array<T: Element, S: AsRef<str>>(&self, name: S) -> Option<Vec<&T>> {
+    pub fn get_element_array<T: Element, S: AsRef<str>>(&self, name: S) -> Option<Vec<T>> {
         self.attributes
             .get(name.as_ref())
-            .and_then(|attr| match attr {
+            .and_then(|attribute| match attribute {
                 DMAttribute::ElementArray(ids) => Some(ids),
                 _ => None,
             })
             .map(|ids| {
                 ids.iter()
                     .filter_map(|id| self.elements.get(id))
-                    .map(|element| T::from_element(element))
+                    .filter_map(|element| T::from_element(element))
                     .collect()
             })
     }
@@ -87,7 +92,7 @@ impl DmElement {
 
     /// Set an element attribute with the given name and element.
     pub fn set_element<T: Element, S: Into<String>>(&mut self, name: S, value: T) {
-        let element = value.get_element();
+        let element = value.to_element();
         self.attributes.insert(name.into(), DMAttribute::Element(element.id));
         self.elements.insert(element.id, element);
     }
@@ -95,7 +100,7 @@ impl DmElement {
     /// Set an element array attribute with the given name and elements.
     pub fn set_element_array<T: Element, S: Into<String>>(&mut self, name: S, value: Vec<T>) {
         let elements = value.into_iter().map(|element| {
-            let element = element.get_element();
+            let element = element.to_element();
             let element_id = element.id;
             self.elements.insert(element_id, element);
             element_id
@@ -121,7 +126,7 @@ impl DmElement {
 
     #[doc(hidden)]
     pub fn add_element<T: Element>(&mut self, value: T) {
-        let element = value.get_element();
+        let element = value.to_element();
         self.elements.insert(element.id, element);
     }
 
