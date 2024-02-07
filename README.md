@@ -35,7 +35,7 @@ impl Element for CoolData {
 let header = DmHeader {
     encoding_name: "binary".to_string(),
     encoding_version: 2,
-    format_name: "dmx".to_string(),x
+    format_name: "dmx".to_string(),
     format_version: 1,
 };
 
