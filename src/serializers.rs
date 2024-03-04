@@ -1,5 +1,4 @@
 use crate::DmElement;
-use regex::Regex;
 use std::{
     error::Error,
     fmt,
@@ -21,11 +20,15 @@ pub struct DmHeader {
 }
 
 impl DmHeader {
-    const MAX_HEADER_LENGTH: usize = 168;
+    const LEGACY_VERSION_STARTING_TOKEN: &str = "<!-- DMXVersion";
+    const VERSION_STARTING_TOKEN: &str = "<!-- dmx encoding";
+    const VERSION_ENDING_TOKEN: &str = "-->";
+    const MAX_FORMAT_LENGTH: u8 = 64;
+    const MAX_HEADER_LENGTH: u8 = 40 + 2 * DmHeader::MAX_FORMAT_LENGTH;
 
     fn from_bytes(data: &[u8]) -> Result<Self, SerializingError> {
         for (index, &value) in data.iter().enumerate() {
-            if index >= Self::MAX_HEADER_LENGTH {
+            if index > Self::MAX_HEADER_LENGTH as usize {
                 return Err(SerializingError::new("Exceeded iteration limit without finding header!"));
             }
 
@@ -38,24 +41,75 @@ impl DmHeader {
     }
 
     fn from_string(data: &str) -> Result<Self, SerializingError> {
-        let header_match = Regex::new(r"<!-- dmx encoding (\w+) (\d+) format (\w+) (\d+) -->").unwrap();
+        if data.starts_with(Self::LEGACY_VERSION_STARTING_TOKEN) {
+            let trimmed = data.trim();
 
-        match header_match.captures(data) {
-            Some(caps) => {
-                let encoding_name = caps[1].to_string();
-                let encoding_version = caps[2].parse::<i32>().map_err(SerializingError::from)?;
-                let format_name = caps[3].to_string();
-                let format_version = caps[4].parse::<i32>().map_err(SerializingError::from)?;
-
-                Ok(Self {
-                    encoding_name,
-                    encoding_version,
-                    format_name,
-                    format_version,
-                })
+            if !trimmed.ends_with(Self::VERSION_ENDING_TOKEN) {
+                return Err(SerializingError::new("String does not match the required format!"));
             }
-            None => Err(SerializingError::new("String does not match the required format!")),
+
+            let header = trimmed[Self::LEGACY_VERSION_STARTING_TOKEN.len()..trimmed.len() - Self::VERSION_ENDING_TOKEN.len()].trim();
+
+            let version_start = match header.rfind('v') {
+                Some(index) => index + 1,
+                None => return Err(SerializingError::new("String does not match the required format!")),
+            };
+
+            let version = header[version_start..].trim().parse::<i32>().map_err(SerializingError::from)?;
+
+            let format = &header[..version_start];
+
+            match format {
+                "binary_v" | "sfm_v" => {
+                    return Ok(Self {
+                        encoding_name: "binary".to_string(),
+                        encoding_version: version,
+                        format_name: "dmx".to_string(),
+                        format_version: -1,
+                    })
+                }
+                _ => return Err(SerializingError::new("Unsupported format type!")),
+            }
         }
+
+        if data.starts_with(Self::VERSION_STARTING_TOKEN) {
+            let trimmed = data.trim();
+
+            if !trimmed.ends_with(Self::VERSION_ENDING_TOKEN) {
+                return Err(SerializingError::new("String does not match the required format!"));
+            }
+
+            let format = trimmed[Self::VERSION_STARTING_TOKEN.len()..trimmed.len() - Self::VERSION_ENDING_TOKEN.len()].trim();
+
+            let mut parts = format.split_whitespace();
+
+            let encoding_name = parts.next().ok_or(SerializingError::new("Header Missing Encodeing Name!"))?.to_string();
+            let encoding_version = parts
+                .next()
+                .ok_or(SerializingError::new("Header Missing Encodeing Version!"))?
+                .parse::<i32>()
+                .map_err(SerializingError::from)?;
+
+            if parts.next().ok_or(SerializingError::new("Header missing format!"))? != "format" {
+                return Err(SerializingError::new("Uknown Argument in Header!"));
+            }
+
+            let format_name = parts.next().ok_or(SerializingError::new("Header Missing Format Name!"))?.to_string();
+            let format_version = parts
+                .next()
+                .ok_or(SerializingError::new("Header Missing Format Version!"))?
+                .parse::<i32>()
+                .map_err(SerializingError::from)?;
+
+            return Ok(Self {
+                encoding_name,
+                encoding_version,
+                format_name,
+                format_version,
+            });
+        }
+
+        Err(SerializingError::new("String does not match the required format!"))
     }
 }
 

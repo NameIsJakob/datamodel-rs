@@ -1,7 +1,7 @@
 use super::{DmHeader, Serializer, SerializingError};
 use crate::{attributes::DMAttribute, Binary, Color, DmElement, Matrix, QAngle, Quaternion, Vector2, Vector3, Vector4};
 use indexmap::IndexMap;
-use std::{str::from_utf8, time::Duration};
+use std::{ptr::read_unaligned, slice, str::from_utf8, time::Duration};
 use uuid::Uuid as UUID;
 
 struct DataBufferReader {
@@ -60,17 +60,27 @@ impl DataBufferReader {
         Ok(i32::from_le_bytes([bytes[0], bytes[1], bytes[2], bytes[3]]))
     }
 
-    fn read_float(&mut self) -> Result<f32, SerializingError> {
-        let bytes = self.read_bytes(4)?;
-        Ok(f32::from_le_bytes([bytes[0], bytes[1], bytes[2], bytes[3]]))
-    }
-
     fn read_id(&mut self) -> Result<UUID, SerializingError> {
         let bytes = self.read_bytes(16)?;
         Ok(UUID::from_bytes_le([
             bytes[0], bytes[1], bytes[2], bytes[3], bytes[4], bytes[5], bytes[6], bytes[7], bytes[8], bytes[9], bytes[10], bytes[11], bytes[12], bytes[13],
             bytes[14], bytes[15],
         ]))
+    }
+
+    fn read<T>(&mut self) -> Result<T, SerializingError> {
+        let bytes = self.read_bytes(std::mem::size_of::<T>())?;
+        Ok(unsafe { read_unaligned(bytes.as_ptr() as *const T) })
+    }
+
+    fn read_array<T>(&mut self, length: usize) -> Result<&[T], SerializingError> {
+        let bytes = self.read_bytes(length * std::mem::size_of::<T>())?;
+
+        let ptr = bytes.as_ptr();
+
+        let slice = unsafe { slice::from_raw_parts(ptr as *const T, length) };
+
+        Ok(slice)
     }
 
     fn read_string_table(&mut self) -> Result<(), SerializingError> {
@@ -585,14 +595,14 @@ impl Serializer for BinarySerializer {
                     }
 
                     3 => {
-                        let attribute_data = data_buffer.read_float()?;
+                        let attribute_data = data_buffer.read::<f32>()?;
 
                         let element_data = elements.get_mut(element_index as usize).unwrap();
                         element_data.set_attribute(attribute_name, attribute_data);
                     }
 
                     4 => {
-                        let attribute_data = data_buffer.read_byte()?;
+                        let attribute_data = data_buffer.read::<u8>()?;
 
                         let element_data = elements.get_mut(element_index as usize).unwrap();
                         element_data.set_attribute(attribute_name, attribute_data != 0);
@@ -621,7 +631,7 @@ impl Serializer for BinarySerializer {
 
                     7 => {
                         if header.encoding_version < 3 {
-                            let attribute_data = data_buffer.read_id()?;
+                            let attribute_data = data_buffer.read::<UUID>()?;
 
                             let element_data = elements.get_mut(element_index as usize).unwrap();
                             element_data.set_attribute(attribute_name, attribute_data);
@@ -634,102 +644,52 @@ impl Serializer for BinarySerializer {
                     }
 
                     8 => {
-                        let attribute_data_r = data_buffer.read_byte()?;
-                        let attribute_data_g = data_buffer.read_byte()?;
-                        let attribute_data_b = data_buffer.read_byte()?;
-                        let attribute_data_a = data_buffer.read_byte()?;
-                        let attribute_data = Color {
-                            r: attribute_data_r,
-                            g: attribute_data_g,
-                            b: attribute_data_b,
-                            a: attribute_data_a,
-                        };
+                        let attribute_data = data_buffer.read::<Color>()?;
 
                         let element_data = elements.get_mut(element_index as usize).unwrap();
                         element_data.set_attribute(attribute_name, attribute_data);
                     }
 
                     9 => {
-                        let attribute_data_x = data_buffer.read_float()?;
-                        let attribute_data_y = data_buffer.read_float()?;
-                        let attribute_data = Vector2 {
-                            x: attribute_data_x,
-                            y: attribute_data_y,
-                        };
+                        let attribute_data = data_buffer.read::<Vector2>()?;
 
                         let element_data = elements.get_mut(element_index as usize).unwrap();
                         element_data.set_attribute(attribute_name, attribute_data);
                     }
 
                     10 => {
-                        let attribute_data_x = data_buffer.read_float()?;
-                        let attribute_data_y = data_buffer.read_float()?;
-                        let attribute_data_z = data_buffer.read_float()?;
-                        let attribute_data = Vector3 {
-                            x: attribute_data_x,
-                            y: attribute_data_y,
-                            z: attribute_data_z,
-                        };
+                        let attribute_data = data_buffer.read::<Vector3>()?;
 
                         let element_data = elements.get_mut(element_index as usize).unwrap();
                         element_data.set_attribute(attribute_name, attribute_data);
                     }
 
                     11 => {
-                        let attribute_data_x = data_buffer.read_float()?;
-                        let attribute_data_y = data_buffer.read_float()?;
-                        let attribute_data_z = data_buffer.read_float()?;
-                        let attribute_data_w = data_buffer.read_float()?;
-                        let attribute_data = Vector4 {
-                            x: attribute_data_x,
-                            y: attribute_data_y,
-                            z: attribute_data_z,
-                            w: attribute_data_w,
-                        };
+                        let attribute_data = data_buffer.read::<Vector4>()?;
 
                         let element_data = elements.get_mut(element_index as usize).unwrap();
                         element_data.set_attribute(attribute_name, attribute_data);
                     }
 
                     12 => {
-                        let attribute_data_x = data_buffer.read_float()?;
-                        let attribute_data_y = data_buffer.read_float()?;
-                        let attribute_data_z = data_buffer.read_float()?;
-                        let attribute_data = QAngle {
-                            x: attribute_data_x,
-                            y: attribute_data_y,
-                            z: attribute_data_z,
-                        };
+                        let attribute_data = data_buffer.read::<QAngle>()?;
 
                         let element_data = elements.get_mut(element_index as usize).unwrap();
                         element_data.set_attribute(attribute_name, attribute_data);
                     }
 
                     13 => {
-                        let attribute_data_x = data_buffer.read_float()?;
-                        let attribute_data_y = data_buffer.read_float()?;
-                        let attribute_data_z = data_buffer.read_float()?;
-                        let attribute_data_w = data_buffer.read_float()?;
-                        let attribute_data = Quaternion {
-                            x: attribute_data_x,
-                            y: attribute_data_y,
-                            z: attribute_data_z,
-                            w: attribute_data_w,
-                        };
+                        let attribute_data = data_buffer.read::<Quaternion>()?;
 
                         let element_data = elements.get_mut(element_index as usize).unwrap();
                         element_data.set_attribute(attribute_name, attribute_data);
                     }
 
                     14 => {
-                        let mut attribute_data: [f32; 16] = [0.0; 16];
-
-                        for i in attribute_data.iter_mut() {
-                            *i = data_buffer.read_float()?;
-                        }
+                        let attribute_data = data_buffer.read::<Matrix>()?;
 
                         let element_data = elements.get_mut(element_index as usize).unwrap();
-                        element_data.set_attribute(attribute_name, Matrix { entries: attribute_data });
+                        element_data.set_attribute(attribute_name, attribute_data);
                     }
 
                     15 => {
@@ -747,13 +707,7 @@ impl Serializer for BinarySerializer {
 
                     16 => {
                         let attribute_array_count = data_buffer.read_int()?;
-                        let mut attribute_data: Vec<i32> = Vec::new();
-                        attribute_data.reserve(attribute_array_count as usize);
-
-                        for _ in 0..attribute_array_count {
-                            let attribute_data_int = data_buffer.read_int()?;
-                            attribute_data.push(attribute_data_int);
-                        }
+                        let attribute_data = data_buffer.read_array::<i32>(attribute_array_count as usize)?.to_vec();
 
                         let element_data = elements.get_mut(element_index as usize).unwrap();
                         element_data.set_attribute(attribute_name, attribute_data);
@@ -761,13 +715,7 @@ impl Serializer for BinarySerializer {
 
                     17 => {
                         let attribute_array_count = data_buffer.read_int()?;
-                        let mut attribute_data: Vec<f32> = Vec::new();
-                        attribute_data.reserve(attribute_array_count as usize);
-
-                        for _ in 0..attribute_array_count {
-                            let attribute_data_float = data_buffer.read_float()?;
-                            attribute_data.push(attribute_data_float);
-                        }
+                        let attribute_data = data_buffer.read_array::<f32>(attribute_array_count as usize)?.to_vec();
 
                         let element_data = elements.get_mut(element_index as usize).unwrap();
                         element_data.set_attribute(attribute_name, attribute_data);
@@ -775,13 +723,7 @@ impl Serializer for BinarySerializer {
 
                     18 => {
                         let attribute_array_count = data_buffer.read_int()?;
-                        let mut attribute_data: Vec<bool> = Vec::new();
-                        attribute_data.reserve(attribute_array_count as usize);
-
-                        for _ in 0..attribute_array_count {
-                            let attribute_data_bool = data_buffer.read_byte()?;
-                            attribute_data.push(attribute_data_bool != 0);
-                        }
+                        let attribute_data = data_buffer.read_array::<bool>(attribute_array_count as usize)?.to_vec();
 
                         let element_data = elements.get_mut(element_index as usize).unwrap();
                         element_data.set_attribute(attribute_name, attribute_data);
@@ -823,13 +765,7 @@ impl Serializer for BinarySerializer {
                     21 => {
                         if header.encoding_version < 3 {
                             let attribute_array_count = data_buffer.read_int()?;
-                            let mut attribute_data: Vec<UUID> = Vec::new();
-                            attribute_data.reserve(attribute_array_count as usize);
-
-                            for _ in 0..attribute_array_count {
-                                let attribute_data_id = data_buffer.read_id()?;
-                                attribute_data.push(attribute_data_id);
-                            }
+                            let attribute_data = data_buffer.read_array::<UUID>(attribute_array_count as usize)?.to_vec();
 
                             let element_data = elements.get_mut(element_index as usize).unwrap();
                             element_data.set_attribute(attribute_name, attribute_data);
@@ -851,22 +787,7 @@ impl Serializer for BinarySerializer {
 
                     22 => {
                         let attribute_array_count = data_buffer.read_int()?;
-                        let mut attribute_data: Vec<Color> = Vec::new();
-                        attribute_data.reserve(attribute_array_count as usize);
-
-                        for _ in 0..attribute_array_count {
-                            let attribute_data_x = data_buffer.read_byte()?;
-                            let attribute_data_y = data_buffer.read_byte()?;
-                            let attribute_data_z = data_buffer.read_byte()?;
-                            let attribute_data_w = data_buffer.read_byte()?;
-
-                            attribute_data.push(Color {
-                                r: attribute_data_x,
-                                g: attribute_data_y,
-                                b: attribute_data_z,
-                                a: attribute_data_w,
-                            });
-                        }
+                        let attribute_data = data_buffer.read_array::<Color>(attribute_array_count as usize)?.to_vec();
 
                         let element_data = elements.get_mut(element_index as usize).unwrap();
                         element_data.set_attribute(attribute_name, attribute_data);
@@ -874,17 +795,7 @@ impl Serializer for BinarySerializer {
 
                     23 => {
                         let attribute_array_count = data_buffer.read_int()?;
-                        let mut attribute_data: Vec<Vector2> = Vec::new();
-                        attribute_data.reserve(attribute_array_count as usize);
-
-                        for _ in 0..attribute_array_count {
-                            let attribute_data_x = data_buffer.read_float()?;
-                            let attribute_data_y = data_buffer.read_float()?;
-                            attribute_data.push(Vector2 {
-                                x: attribute_data_x,
-                                y: attribute_data_y,
-                            });
-                        }
+                        let attribute_data = data_buffer.read_array::<Vector2>(attribute_array_count as usize)?.to_vec();
 
                         let element_data = elements.get_mut(element_index as usize).unwrap();
                         element_data.set_attribute(attribute_name, attribute_data);
@@ -892,20 +803,7 @@ impl Serializer for BinarySerializer {
 
                     24 => {
                         let attribute_array_count = data_buffer.read_int()?;
-                        let mut attribute_data: Vec<Vector3> = Vec::new();
-                        attribute_data.reserve(attribute_array_count as usize);
-
-                        for _ in 0..attribute_array_count {
-                            let attribute_data_x = data_buffer.read_float()?;
-                            let attribute_data_y = data_buffer.read_float()?;
-                            let attribute_data_z = data_buffer.read_float()?;
-
-                            attribute_data.push(Vector3 {
-                                x: attribute_data_x,
-                                y: attribute_data_y,
-                                z: attribute_data_z,
-                            });
-                        }
+                        let attribute_data = data_buffer.read_array::<Vector3>(attribute_array_count as usize)?.to_vec();
 
                         let element_data = elements.get_mut(element_index as usize).unwrap();
                         element_data.set_attribute(attribute_name, attribute_data);
@@ -913,22 +811,7 @@ impl Serializer for BinarySerializer {
 
                     25 => {
                         let attribute_array_count = data_buffer.read_int()?;
-                        let mut attribute_data: Vec<Vector4> = Vec::new();
-                        attribute_data.reserve(attribute_array_count as usize);
-
-                        for _ in 0..attribute_array_count {
-                            let attribute_data_x = data_buffer.read_float()?;
-                            let attribute_data_y = data_buffer.read_float()?;
-                            let attribute_data_z = data_buffer.read_float()?;
-                            let attribute_data_w = data_buffer.read_float()?;
-
-                            attribute_data.push(Vector4 {
-                                x: attribute_data_x,
-                                y: attribute_data_y,
-                                z: attribute_data_z,
-                                w: attribute_data_w,
-                            });
-                        }
+                        let attribute_data = data_buffer.read_array::<Vector4>(attribute_array_count as usize)?.to_vec();
 
                         let element_data = elements.get_mut(element_index as usize).unwrap();
                         element_data.set_attribute(attribute_name, attribute_data);
@@ -936,20 +819,7 @@ impl Serializer for BinarySerializer {
 
                     26 => {
                         let attribute_array_count = data_buffer.read_int()?;
-                        let mut attribute_data: Vec<QAngle> = Vec::new();
-                        attribute_data.reserve(attribute_array_count as usize);
-
-                        for _ in 0..attribute_array_count {
-                            let attribute_data_x = data_buffer.read_float()?;
-                            let attribute_data_y = data_buffer.read_float()?;
-                            let attribute_data_z = data_buffer.read_float()?;
-
-                            attribute_data.push(QAngle {
-                                x: attribute_data_x,
-                                y: attribute_data_y,
-                                z: attribute_data_z,
-                            });
-                        }
+                        let attribute_data = data_buffer.read_array::<QAngle>(attribute_array_count as usize)?.to_vec();
 
                         let element_data = elements.get_mut(element_index as usize).unwrap();
                         element_data.set_attribute(attribute_name, attribute_data);
@@ -957,22 +827,7 @@ impl Serializer for BinarySerializer {
 
                     27 => {
                         let attribute_array_count = data_buffer.read_int()?;
-                        let mut attribute_data: Vec<Quaternion> = Vec::new();
-                        attribute_data.reserve(attribute_array_count as usize);
-
-                        for _ in 0..attribute_array_count {
-                            let attribute_data_x = data_buffer.read_float()?;
-                            let attribute_data_y = data_buffer.read_float()?;
-                            let attribute_data_z = data_buffer.read_float()?;
-                            let attribute_data_w = data_buffer.read_float()?;
-
-                            attribute_data.push(Quaternion {
-                                x: attribute_data_x,
-                                y: attribute_data_y,
-                                z: attribute_data_z,
-                                w: attribute_data_w,
-                            });
-                        }
+                        let attribute_data = data_buffer.read_array::<Quaternion>(attribute_array_count as usize)?.to_vec();
 
                         let element_data = elements.get_mut(element_index as usize).unwrap();
                         element_data.set_attribute(attribute_name, attribute_data);
@@ -980,20 +835,7 @@ impl Serializer for BinarySerializer {
 
                     28 => {
                         let attribute_array_count = data_buffer.read_int()?;
-                        let mut attribute_data: Vec<Matrix> = Vec::new();
-                        attribute_data.reserve(attribute_array_count as usize);
-
-                        for _ in 0..attribute_array_count {
-                            let mut attribute_data_matrix: [f32; 16] = [0.0; 16];
-
-                            for i in attribute_data_matrix.iter_mut() {
-                                *i = data_buffer.read_float()?;
-                            }
-
-                            attribute_data.push(Matrix {
-                                entries: attribute_data_matrix,
-                            });
-                        }
+                        let attribute_data = data_buffer.read_array::<Matrix>(attribute_array_count as usize)?.to_vec();
 
                         let element_data = elements.get_mut(element_index as usize).unwrap();
                         element_data.set_attribute(attribute_name, attribute_data);

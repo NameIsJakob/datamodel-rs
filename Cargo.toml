@@ -1,6 +1,6 @@
 [package]
 name = "datamodel"
-version = "0.5.2"
+version = "0.5.3"
 edition = "2021"
 authors = ["Jakobg1215"]
 description = "A rust library to serialize and deserialize Valve's proprietary DMX file format."
@@ -12,6 +12,5 @@ readme = "README.md"
 exclude = ["tests/*"]
 
 [dependencies]
-indexmap = "2.1.0"
-regex = "1.10.2"
-uuid = { version = "1.6.1", features = ["v4", "fast-rng", "macro-diagnostics"] }
+indexmap = "2.2.5"
+uuid = { version = "1.7.0", features = ["v4"] }
