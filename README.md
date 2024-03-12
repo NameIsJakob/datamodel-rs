@@ -8,51 +8,6 @@ DMX is a file format created by Valve Corporation to store data in a key-value f
 for other purposes such as 3D models and particles. DMX files can be saved in either text or binary format. DMX is similar to XML in that it uses elements and
 attributes to store data.
 
-# Example
-
-```rs
-struct CoolData {
-    name: String,
-    age: i32,
-    is_cool: bool,
-}
-impl Element for CoolData {
-    fn to_element(self) -> DmElement {
-        let mut element = DmElement::new(self.name, "CoolData".to_string());
-        element.set_attribute("age", self.age);
-        element.set_attribute("is_cool", self.is_cool);
-        element
-    }
-    fn from_element(value: &DmElement) -> Option<Self> {
-        Some(Self {
-            name: value.get_name().to_string(),
-            age: *value.get_attribute::<i32>("age")?,
-            is_cool: *value.get_attribute::<bool>("is_cool")?,
-        })
-    }
-}
-
-let header = DmHeader {
-    encoding_name: "binary".to_string(),
-    encoding_version: 2,
-    format_name: "dmx".to_string(),
-    format_version: 1,
-};
-
-let mut root = DmElement::empty();
-root.set_name("Cool Data");
-root.set_element(
-    "The Data",
-    CoolData {
-        name: "bob".to_string(),
-        age: 42,
-        is_cool: true,
-    },
-);
-
-let _ = serialize_file("TheCoolFile.dmx", &root, &header);
-```
-
 # What is supported?
 
 -   Binary encoding version 1 - 5 supported
@@ -61,3 +16,81 @@ let _ = serialize_file("TheCoolFile.dmx", &root, &header);
 
 -   keyvalues2 encoding
 -   keyvalues2_flat encoding
+
+# Examples
+
+## Creating An DMX File
+
+```rs
+use datamodel as dm;
+
+// A dmx file will always start with a root element.
+let mut root = dm::Element::default();
+
+root.add_attribute("Funnier Number", 25);
+root.add_attribute("The Half", 0.5);
+```
+
+## Creating A Element Class
+
+```rs
+// Eventually you will just derive this.
+
+#[derive(Clone, Debug)]
+struct TheTest {
+    name: String,
+    age: i32,
+    cool: bool,
+}
+
+impl TheTest {
+    fn new(name: String, age: i32, cool: bool) -> Self {
+        Self { name, age, cool }
+    }
+}
+
+impl From<TheTest> for dm::Element {
+    fn from(test: TheTest) -> Self {
+        let mut root = dm::Element::new(test.name, "TheTest");
+        root.add_attribute("Age", test.age);
+        root.add_attribute("Cool", test.cool);
+
+        root
+    }
+}
+
+impl From<&Element> for TheTest {
+    fn from(value: &Element) -> Self {
+        let name = value.name.clone();
+        let age = value.get_attribute::<i32>("Age").unwrap();
+        let cool = value.get_attribute::<bool>("Cool").unwrap();
+
+        Self::new(name, *age, *cool)
+    }
+}
+```
+
+## Using Element Class
+
+```rs
+let the_test = let the_test = TheTest::new("The Test".to_string(), 25, true);
+
+root.add_attribute("The Test", the_test);
+```
+
+## Reading Attributes
+
+```rs
+let (header, root) = dm::deserialize("test.dmx").unwrap();
+
+let funny = root.get_attribute::<i32>("Funnier Number").unwrap();
+let half = root.get_attribute::<f32>("The Half").unwrap();
+```
+
+## Reading Elements
+
+```rs
+// You have to get the uuid first as a attribute can point towards mutiple elements
+let the_testing_id = root.get_attribute("The Test").unwrap();
+let the_testing: TheTest = root.get_element(the_testing_id).unwrap();
+```

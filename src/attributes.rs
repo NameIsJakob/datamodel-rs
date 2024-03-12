@@ -1,15 +1,15 @@
 use std::time::Duration;
 use uuid::Uuid as UUID;
 
-pub trait Attribute {
-    fn to_attribute(self) -> DMAttribute;
-    fn from_attribute(value: &DMAttribute) -> Option<&Self>
-    where
-        Self: Sized;
+use crate::elements::Element;
+
+#[derive(Clone, Debug)]
+pub struct ObjectId {
+    pub id: UUID,
 }
 
 #[derive(Clone, Debug)]
-pub struct Binary {
+pub struct BinaryData {
     pub data: Vec<u8>,
 }
 
@@ -63,14 +63,15 @@ pub struct Matrix {
 }
 
 #[derive(Clone, Debug)]
-pub enum DMAttribute {
+pub enum Attribute {
+    ElementData(Element),
     Element(UUID),
     Int(i32),
     Float(f32),
     Bool(bool),
     String(String),
-    Binary(Binary),
-    Id(UUID),
+    Binary(BinaryData),
+    Id(ObjectId),
     Time(Duration),
     Color(Color),
     Vector2(Vector2),
@@ -80,13 +81,14 @@ pub enum DMAttribute {
     Quaternion(Quaternion),
     Matrix(Matrix),
 
+    ElementDataArray(Vec<Element>),
     ElementArray(Vec<UUID>),
     IntArray(Vec<i32>),
     FloatArray(Vec<f32>),
     BoolArray(Vec<bool>),
     StringArray(Vec<String>),
-    BinaryArray(Vec<Binary>),
-    IdArray(Vec<UUID>),
+    BinaryArray(Vec<BinaryData>),
+    IdArray(Vec<ObjectId>),
     TimeArray(Vec<Duration>),
     ColorArray(Vec<Color>),
     Vector2Array(Vec<Vector2>),
@@ -97,366 +99,70 @@ pub enum DMAttribute {
     MatrixArray(Vec<Matrix>),
 }
 
-impl Attribute for i32 {
-    fn to_attribute(self) -> DMAttribute {
-        DMAttribute::Int(self)
-    }
-
-    fn from_attribute(value: &DMAttribute) -> Option<&Self> {
-        match value {
-            DMAttribute::Int(value) => Some(value),
-            _ => None,
+macro_rules! attribute_type {
+    ($qualifier:ty, $attribute:path) => {
+        impl From<$qualifier> for Attribute {
+            fn from(value: $qualifier) -> Self {
+                $attribute(value)
+            }
         }
+
+        impl<'a> TryFrom<&'a Attribute> for &'a $qualifier {
+            type Error = InvalidAttribute;
+
+            fn try_from(attr: &'a Attribute) -> Result<Self, Self::Error> {
+                match attr {
+                    $attribute(value) => Ok(value),
+                    _ => Err(InvalidAttribute {}),
+                }
+            }
+        }
+    };
+}
+
+pub struct InvalidAttribute {}
+
+impl From<Element> for Attribute {
+    fn from(element: Element) -> Self {
+        Attribute::ElementData(element)
     }
 }
 
-impl Attribute for f32 {
-    fn to_attribute(self) -> DMAttribute {
-        DMAttribute::Float(self)
-    }
-
-    fn from_attribute(value: &DMAttribute) -> Option<&Self> {
-        match value {
-            DMAttribute::Float(value) => Some(value),
-            _ => None,
-        }
+impl From<Vec<Element>> for Attribute {
+    fn from(elements: Vec<Element>) -> Self {
+        Attribute::ElementDataArray(elements)
     }
 }
 
-impl Attribute for bool {
-    fn to_attribute(self) -> DMAttribute {
-        DMAttribute::Bool(self)
-    }
+attribute_type!(UUID, Attribute::Element);
+attribute_type!(i32, Attribute::Int);
+attribute_type!(f32, Attribute::Float);
+attribute_type!(bool, Attribute::Bool);
+attribute_type!(String, Attribute::String);
+attribute_type!(BinaryData, Attribute::Binary);
+attribute_type!(ObjectId, Attribute::Id);
+attribute_type!(Duration, Attribute::Time);
+attribute_type!(Color, Attribute::Color);
+attribute_type!(Vector2, Attribute::Vector2);
+attribute_type!(Vector3, Attribute::Vector3);
+attribute_type!(Vector4, Attribute::Vector4);
+attribute_type!(QAngle, Attribute::QAngle);
+attribute_type!(Quaternion, Attribute::Quaternion);
+attribute_type!(Matrix, Attribute::Matrix);
 
-    fn from_attribute(value: &DMAttribute) -> Option<&Self> {
-        match value {
-            DMAttribute::Bool(value) => Some(value),
-            _ => None,
-        }
-    }
-}
-
-impl Attribute for String {
-    fn to_attribute(self) -> DMAttribute {
-        DMAttribute::String(self)
-    }
-
-    fn from_attribute(value: &DMAttribute) -> Option<&Self> {
-        match value {
-            DMAttribute::String(value) => Some(value),
-            _ => None,
-        }
-    }
-}
-
-impl Attribute for Binary {
-    fn to_attribute(self) -> DMAttribute {
-        DMAttribute::Binary(self)
-    }
-
-    fn from_attribute(value: &DMAttribute) -> Option<&Self> {
-        match value {
-            DMAttribute::Binary(value) => Some(value),
-            _ => None,
-        }
-    }
-}
-
-impl Attribute for UUID {
-    fn to_attribute(self) -> DMAttribute {
-        DMAttribute::Id(self)
-    }
-
-    fn from_attribute(value: &DMAttribute) -> Option<&Self> {
-        match value {
-            DMAttribute::Id(value) => Some(value),
-            _ => None,
-        }
-    }
-}
-
-impl Attribute for Duration {
-    fn to_attribute(self) -> DMAttribute {
-        DMAttribute::Time(self)
-    }
-
-    fn from_attribute(value: &DMAttribute) -> Option<&Self> {
-        match value {
-            DMAttribute::Time(value) => Some(value),
-            _ => None,
-        }
-    }
-}
-
-impl Attribute for Color {
-    fn to_attribute(self) -> DMAttribute {
-        DMAttribute::Color(self)
-    }
-
-    fn from_attribute(value: &DMAttribute) -> Option<&Self> {
-        match value {
-            DMAttribute::Color(value) => Some(value),
-            _ => None,
-        }
-    }
-}
-
-impl Attribute for Vector2 {
-    fn to_attribute(self) -> DMAttribute {
-        DMAttribute::Vector2(self)
-    }
-
-    fn from_attribute(value: &DMAttribute) -> Option<&Self> {
-        match value {
-            DMAttribute::Vector2(value) => Some(value),
-            _ => None,
-        }
-    }
-}
-
-impl Attribute for Vector3 {
-    fn to_attribute(self) -> DMAttribute {
-        DMAttribute::Vector3(self)
-    }
-
-    fn from_attribute(value: &DMAttribute) -> Option<&Self> {
-        match value {
-            DMAttribute::Vector3(value) => Some(value),
-            _ => None,
-        }
-    }
-}
-
-impl Attribute for Vector4 {
-    fn to_attribute(self) -> DMAttribute {
-        DMAttribute::Vector4(self)
-    }
-
-    fn from_attribute(value: &DMAttribute) -> Option<&Self> {
-        match value {
-            DMAttribute::Vector4(value) => Some(value),
-            _ => None,
-        }
-    }
-}
-
-impl Attribute for QAngle {
-    fn to_attribute(self) -> DMAttribute {
-        DMAttribute::QAngle(self)
-    }
-
-    fn from_attribute(value: &DMAttribute) -> Option<&Self> {
-        match value {
-            DMAttribute::QAngle(value) => Some(value),
-            _ => None,
-        }
-    }
-}
-
-impl Attribute for Quaternion {
-    fn to_attribute(self) -> DMAttribute {
-        DMAttribute::Quaternion(self)
-    }
-
-    fn from_attribute(value: &DMAttribute) -> Option<&Self> {
-        match value {
-            DMAttribute::Quaternion(value) => Some(value),
-            _ => None,
-        }
-    }
-}
-
-impl Attribute for Matrix {
-    fn to_attribute(self) -> DMAttribute {
-        DMAttribute::Matrix(self)
-    }
-
-    fn from_attribute(value: &DMAttribute) -> Option<&Self> {
-        match value {
-            DMAttribute::Matrix(value) => Some(value),
-            _ => None,
-        }
-    }
-}
-
-impl Attribute for Vec<i32> {
-    fn to_attribute(self) -> DMAttribute {
-        DMAttribute::IntArray(self)
-    }
-
-    fn from_attribute(value: &DMAttribute) -> Option<&Self> {
-        match value {
-            DMAttribute::IntArray(value) => Some(value),
-            _ => None,
-        }
-    }
-}
-
-impl Attribute for Vec<f32> {
-    fn to_attribute(self) -> DMAttribute {
-        DMAttribute::FloatArray(self)
-    }
-
-    fn from_attribute(value: &DMAttribute) -> Option<&Self> {
-        match value {
-            DMAttribute::FloatArray(value) => Some(value),
-            _ => None,
-        }
-    }
-}
-
-impl Attribute for Vec<bool> {
-    fn to_attribute(self) -> DMAttribute {
-        DMAttribute::BoolArray(self)
-    }
-
-    fn from_attribute(value: &DMAttribute) -> Option<&Self> {
-        match value {
-            DMAttribute::BoolArray(value) => Some(value),
-            _ => None,
-        }
-    }
-}
-
-impl Attribute for Vec<String> {
-    fn to_attribute(self) -> DMAttribute {
-        DMAttribute::StringArray(self)
-    }
-
-    fn from_attribute(value: &DMAttribute) -> Option<&Self> {
-        match value {
-            DMAttribute::StringArray(value) => Some(value),
-            _ => None,
-        }
-    }
-}
-
-impl Attribute for Vec<Binary> {
-    fn to_attribute(self) -> DMAttribute {
-        DMAttribute::BinaryArray(self)
-    }
-
-    fn from_attribute(value: &DMAttribute) -> Option<&Self> {
-        match value {
-            DMAttribute::BinaryArray(value) => Some(value),
-            _ => None,
-        }
-    }
-}
-
-impl Attribute for Vec<UUID> {
-    fn to_attribute(self) -> DMAttribute {
-        DMAttribute::IdArray(self)
-    }
-
-    fn from_attribute(value: &DMAttribute) -> Option<&Self> {
-        match value {
-            DMAttribute::IdArray(value) => Some(value),
-            _ => None,
-        }
-    }
-}
-
-impl Attribute for Vec<Duration> {
-    fn to_attribute(self) -> DMAttribute {
-        DMAttribute::TimeArray(self)
-    }
-
-    fn from_attribute(value: &DMAttribute) -> Option<&Self> {
-        match value {
-            DMAttribute::TimeArray(value) => Some(value),
-            _ => None,
-        }
-    }
-}
-
-impl Attribute for Vec<Color> {
-    fn to_attribute(self) -> DMAttribute {
-        DMAttribute::ColorArray(self)
-    }
-
-    fn from_attribute(value: &DMAttribute) -> Option<&Self> {
-        match value {
-            DMAttribute::ColorArray(value) => Some(value),
-            _ => None,
-        }
-    }
-}
-
-impl Attribute for Vec<Vector2> {
-    fn to_attribute(self) -> DMAttribute {
-        DMAttribute::Vector2Array(self)
-    }
-
-    fn from_attribute(value: &DMAttribute) -> Option<&Self> {
-        match value {
-            DMAttribute::Vector2Array(value) => Some(value),
-            _ => None,
-        }
-    }
-}
-
-impl Attribute for Vec<Vector3> {
-    fn to_attribute(self) -> DMAttribute {
-        DMAttribute::Vector3Array(self)
-    }
-
-    fn from_attribute(value: &DMAttribute) -> Option<&Self> {
-        match value {
-            DMAttribute::Vector3Array(value) => Some(value),
-            _ => None,
-        }
-    }
-}
-
-impl Attribute for Vec<Vector4> {
-    fn to_attribute(self) -> DMAttribute {
-        DMAttribute::Vector4Array(self)
-    }
-
-    fn from_attribute(value: &DMAttribute) -> Option<&Self> {
-        match value {
-            DMAttribute::Vector4Array(value) => Some(value),
-            _ => None,
-        }
-    }
-}
-
-impl Attribute for Vec<QAngle> {
-    fn to_attribute(self) -> DMAttribute {
-        DMAttribute::QAngleArray(self)
-    }
-
-    fn from_attribute(value: &DMAttribute) -> Option<&Self> {
-        match value {
-            DMAttribute::QAngleArray(value) => Some(value),
-            _ => None,
-        }
-    }
-}
-
-impl Attribute for Vec<Quaternion> {
-    fn to_attribute(self) -> DMAttribute {
-        DMAttribute::QuaternionArray(self)
-    }
-
-    fn from_attribute(value: &DMAttribute) -> Option<&Self> {
-        match value {
-            DMAttribute::QuaternionArray(value) => Some(value),
-            _ => None,
-        }
-    }
-}
-
-impl Attribute for Vec<Matrix> {
-    fn to_attribute(self) -> DMAttribute {
-        DMAttribute::MatrixArray(self)
-    }
-
-    fn from_attribute(value: &DMAttribute) -> Option<&Self> {
-        match value {
-            DMAttribute::MatrixArray(value) => Some(value),
-            _ => None,
-        }
-    }
-}
+// TODO: Make this automatically generated in the macro.
+attribute_type!(Vec<UUID>, Attribute::ElementArray);
+attribute_type!(Vec<i32>, Attribute::IntArray);
+attribute_type!(Vec<f32>, Attribute::FloatArray);
+attribute_type!(Vec<bool>, Attribute::BoolArray);
+attribute_type!(Vec<String>, Attribute::StringArray);
+attribute_type!(Vec<BinaryData>, Attribute::BinaryArray);
+attribute_type!(Vec<ObjectId>, Attribute::IdArray);
+attribute_type!(Vec<Duration>, Attribute::TimeArray);
+attribute_type!(Vec<Color>, Attribute::ColorArray);
+attribute_type!(Vec<Vector2>, Attribute::Vector2Array);
+attribute_type!(Vec<Vector3>, Attribute::Vector3Array);
+attribute_type!(Vec<Vector4>, Attribute::Vector4Array);
+attribute_type!(Vec<QAngle>, Attribute::QAngleArray);
+attribute_type!(Vec<Quaternion>, Attribute::QuaternionArray);
+attribute_type!(Vec<Matrix>, Attribute::MatrixArray);

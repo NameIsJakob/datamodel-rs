@@ -1,74 +1,154 @@
-use crate::DmElement;
 use std::{
-    error::Error,
-    fmt,
+    fmt::{self, Display, Formatter},
     fs::{read, write},
+    io::ErrorKind,
     path::Path,
-    str::from_utf8,
 };
 
 mod binary;
-pub use binary::BinarySerializer;
 
-/// The header of a DMX file.
-/// Tells what encoding and version the file is using.
-pub struct DmHeader {
-    pub encoding_name: String,
-    pub encoding_version: i32,
-    pub format_name: String,
-    pub format_version: i32,
+pub use self::binary::BinarySerializer;
+use crate::elements::Element;
+
+pub trait Serializer {
+    fn serialize(root: &Element, header: &Header) -> Result<Vec<u8>, SerializationError>;
+    fn deserialize(data: Vec<u8>) -> Result<Element, SerializationError>;
 }
 
-impl DmHeader {
-    const LEGACY_VERSION_STARTING_TOKEN: &str = "<!-- DMXVersion";
-    const VERSION_STARTING_TOKEN: &str = "<!-- dmx encoding";
-    const VERSION_ENDING_TOKEN: &str = "-->";
-    const MAX_FORMAT_LENGTH: u8 = 64;
-    const MAX_HEADER_LENGTH: u8 = 40 + 2 * DmHeader::MAX_FORMAT_LENGTH;
+#[derive(Debug, Clone)]
+pub enum SerializationFormat {
+    BinaryV1,
+    BinaryV2,
+    BinaryV3,
+    BinaryV4,
+    BinaryV5,
+}
 
-    fn from_bytes(data: &[u8]) -> Result<Self, SerializingError> {
+#[derive(Debug)]
+pub enum SerializationError {
+    FileReadError,
+    FileNotFound,
+    FilePermissionDenied,
+    InvalidHeaderLength,
+    InvalidFormatLength,
+    InvalidHeader,
+    InvalidHeaderEncodingVersion,
+    InvalidEncoding,
+    UnexpectedEndOfFile,
+    ByteExhaustion,
+    InvalidStringIndex,
+    InvalidElementIndex,
+    InvalidAttributeType,
+    InvalidUUID,
+    WrongDeserializer,
+    InvalidAttributeForVersion,
+}
+
+#[derive(Debug, Clone)]
+pub struct Header {
+    pub encoding: SerializationFormat,
+    format: String,
+    pub version: i32,
+    legacy: bool,
+}
+
+impl Header {
+    pub fn new<F: Into<String>>(encoding: SerializationFormat, format: F, version: i32) -> Self {
+        Self {
+            encoding,
+            format: format.into(),
+            version,
+            legacy: false,
+        }
+    }
+
+    pub fn is_legacy(&self) -> bool {
+        self.legacy
+    }
+
+    pub fn encoding_version(&self) -> u8 {
+        match self.encoding {
+            SerializationFormat::BinaryV1 => 1,
+            SerializationFormat::BinaryV2 => 2,
+            SerializationFormat::BinaryV3 => 3,
+            SerializationFormat::BinaryV4 => 4,
+            SerializationFormat::BinaryV5 => 5,
+        }
+    }
+
+    pub fn encoding_string(&self) -> String {
+        match self.encoding {
+            SerializationFormat::BinaryV1 => "binary",
+            SerializationFormat::BinaryV2 => "binary",
+            SerializationFormat::BinaryV3 => "binary",
+            SerializationFormat::BinaryV4 => "binary",
+            SerializationFormat::BinaryV5 => "binary",
+        }
+        .to_string()
+    }
+
+    pub fn set_format(&mut self, format: String) {
+        self.format = format;
+    }
+
+    const LEGACY_VERSION_STARTING_TOKEN: &'static str = "<!-- DMXVersion";
+    const VERSION_STARTING_TOKEN: &'static str = "<!-- dmx encoding";
+    const VERSION_ENDING_TOKEN: &'static str = "-->";
+    const MAX_FORMAT_LENGTH: u8 = 64;
+    const MAX_HEADER_LENGTH: u8 = 40 + 2 * Header::MAX_FORMAT_LENGTH;
+
+    pub fn from_bytes(data: &[u8]) -> Result<Self, SerializationError> {
         for (index, &value) in data.iter().enumerate() {
             if index > Self::MAX_HEADER_LENGTH as usize {
-                return Err(SerializingError::new("Exceeded iteration limit without finding header!"));
+                return Err(SerializationError::InvalidHeaderLength);
             }
 
             if value == b'\n' {
-                return Self::from_string(from_utf8(&data[0..index]).unwrap());
+                return Self::from_string(String::from_utf8_lossy(&data[0..index]).into_owned().as_str());
             }
         }
 
-        Err(SerializingError::new("Unexpected end of file!"))
+        Err(SerializationError::UnexpectedEndOfFile)
     }
 
-    fn from_string(data: &str) -> Result<Self, SerializingError> {
+    pub fn from_string(data: &str) -> Result<Self, SerializationError> {
         if data.starts_with(Self::LEGACY_VERSION_STARTING_TOKEN) {
             let trimmed = data.trim();
 
             if !trimmed.ends_with(Self::VERSION_ENDING_TOKEN) {
-                return Err(SerializingError::new("String does not match the required format!"));
+                return Err(SerializationError::InvalidHeader);
             }
 
             let header = trimmed[Self::LEGACY_VERSION_STARTING_TOKEN.len()..trimmed.len() - Self::VERSION_ENDING_TOKEN.len()].trim();
 
             let version_start = match header.rfind('v') {
                 Some(index) => index + 1,
-                None => return Err(SerializingError::new("String does not match the required format!")),
+                None => 0,
             };
 
-            let version = header[version_start..].trim().parse::<i32>().map_err(SerializingError::from)?;
+            let encoding = &header[..version_start];
 
-            let format = &header[..version_start];
+            match encoding {
+                // sfm_vN
+                "binary_v" => {
+                    let version = header[version_start..].trim().parse::<i32>().map_err(|_| SerializationError::InvalidHeader)?;
 
-            match format {
-                "binary_v" | "sfm_v" => {
                     return Ok(Self {
-                        encoding_name: "binary".to_string(),
-                        encoding_version: version,
-                        format_name: "dmx".to_string(),
-                        format_version: -1,
-                    })
+                        encoding: match version {
+                            1 => SerializationFormat::BinaryV1,
+                            2 => SerializationFormat::BinaryV2,
+                            _ => return Err(SerializationError::InvalidHeaderEncodingVersion),
+                        },
+                        format: format!("{}{}", encoding, version),
+                        version: -1,
+                        legacy: true,
+                    });
                 }
-                _ => return Err(SerializingError::new("Unsupported format type!")),
+                // keyvalues2_v1
+                // keyvalues2_flat_v1
+                // xml
+                // xml_flat
+                _ => return Err(SerializationError::InvalidEncoding),
             }
         }
 
@@ -76,93 +156,100 @@ impl DmHeader {
             let trimmed = data.trim();
 
             if !trimmed.ends_with(Self::VERSION_ENDING_TOKEN) {
-                return Err(SerializingError::new("String does not match the required format!"));
+                return Err(SerializationError::InvalidHeader);
             }
 
             let format = trimmed[Self::VERSION_STARTING_TOKEN.len()..trimmed.len() - Self::VERSION_ENDING_TOKEN.len()].trim();
 
             let mut parts = format.split_whitespace();
 
-            let encoding_name = parts.next().ok_or(SerializingError::new("Header Missing Encodeing Name!"))?.to_string();
+            let encoding_name = parts.next().ok_or(SerializationError::InvalidHeader)?.to_string();
             let encoding_version = parts
                 .next()
-                .ok_or(SerializingError::new("Header Missing Encodeing Version!"))?
+                .ok_or(SerializationError::InvalidHeader)?
                 .parse::<i32>()
-                .map_err(SerializingError::from)?;
+                .map_err(|_| SerializationError::InvalidHeader)?;
 
-            if parts.next().ok_or(SerializingError::new("Header missing format!"))? != "format" {
-                return Err(SerializingError::new("Uknown Argument in Header!"));
+            if parts.next().ok_or(SerializationError::InvalidHeader)? != "format" {
+                return Err(SerializationError::InvalidHeader);
             }
 
-            let format_name = parts.next().ok_or(SerializingError::new("Header Missing Format Name!"))?.to_string();
+            let format_name = parts.next().ok_or(SerializationError::InvalidHeader)?.to_string();
             let format_version = parts
                 .next()
-                .ok_or(SerializingError::new("Header Missing Format Version!"))?
+                .ok_or(SerializationError::InvalidHeader)?
                 .parse::<i32>()
-                .map_err(SerializingError::from)?;
+                .map_err(|_| SerializationError::InvalidHeader)?;
 
             return Ok(Self {
-                encoding_name,
-                encoding_version,
-                format_name,
-                format_version,
+                encoding: match encoding_name.as_str() {
+                    "binary" => match encoding_version {
+                        1 => SerializationFormat::BinaryV1,
+                        2 => SerializationFormat::BinaryV2,
+                        3 => SerializationFormat::BinaryV3,
+                        4 => SerializationFormat::BinaryV4,
+                        5 => SerializationFormat::BinaryV5,
+                        _ => return Err(SerializationError::InvalidHeaderEncodingVersion),
+                    },
+                    _ => return Err(SerializationError::InvalidEncoding),
+                },
+                format: format_name,
+                version: format_version,
+                legacy: false,
             });
         }
 
-        Err(SerializingError::new("String does not match the required format!"))
+        Err(SerializationError::InvalidHeader)
     }
 }
 
-pub trait Serializer {
-    fn serialize(root: &DmElement, header: &DmHeader) -> Result<Vec<u8>, SerializingError>;
-    fn deserialize(data: Vec<u8>) -> Result<DmElement, SerializingError>;
-}
-
-#[derive(Debug)]
-pub struct SerializingError {
-    details: String,
-}
-
-/// Deserializes a DMX file into a DmElement.
-pub fn deserialize_file<P: AsRef<Path>>(path: P) -> Result<(DmHeader, DmElement), SerializingError> {
-    let data = read(path).map_err(SerializingError::from)?;
-
-    let header = DmHeader::from_bytes(&data)?;
-
-    match header.encoding_name.as_str() {
-        "binary" => Ok((header, BinarySerializer::deserialize(data)?)),
-        _ => Err(SerializingError::new("Unsupported encoding!")),
+impl Display for Header {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        writeln!(
+            f,
+            "{} {} {} format {} {} {}",
+            Self::VERSION_STARTING_TOKEN,
+            self.encoding_string(),
+            self.encoding_version(),
+            self.format,
+            self.version,
+            Self::VERSION_ENDING_TOKEN
+        )
     }
 }
 
-/// Serializes a DmElement into a DMX file.
-pub fn serialize_file<P: AsRef<Path>>(path: P, root: &DmElement, header: &DmHeader) -> Result<(), SerializingError> {
-    let data = match header.encoding_name.as_str() {
-        "binary" => BinarySerializer::serialize(root, header)?,
-        _ => return Err(SerializingError::new("Unsupported encoding!")),
+pub fn deserialize<P: AsRef<Path>>(path: P) -> Result<(Header, Element), SerializationError> {
+    let data = match read(path) {
+        Ok(data) => data,
+        Err(error) => match error.kind() {
+            ErrorKind::NotFound => return Err(SerializationError::FileNotFound),
+            ErrorKind::PermissionDenied => return Err(SerializationError::FilePermissionDenied),
+            _ => return Err(SerializationError::FileReadError),
+        },
     };
 
-    write(path, data).map_err(SerializingError::from)
-}
+    let header = Header::from_bytes(&data)?;
 
-impl SerializingError {
-    pub fn new(msg: &str) -> Self {
-        Self { details: msg.to_string() }
-    }
-
-    pub fn from<T: Error>(error: T) -> Self {
-        Self::new(&error.to_string())
+    match header.encoding {
+        SerializationFormat::BinaryV1
+        | SerializationFormat::BinaryV2
+        | SerializationFormat::BinaryV3
+        | SerializationFormat::BinaryV4
+        | SerializationFormat::BinaryV5 => BinarySerializer::deserialize(data).map(|element| (header, element)),
     }
 }
 
-impl fmt::Display for SerializingError {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "{}", self.details)
-    }
-}
+pub fn serialize<P: AsRef<Path>>(path: P, root: &Element, header: &Header) -> Result<(), SerializationError> {
+    let data = match header.encoding {
+        SerializationFormat::BinaryV1
+        | SerializationFormat::BinaryV2
+        | SerializationFormat::BinaryV3
+        | SerializationFormat::BinaryV4
+        | SerializationFormat::BinaryV5 => BinarySerializer::serialize(root, header)?,
+    };
 
-impl Error for SerializingError {
-    fn description(&self) -> &str {
-        &self.details
-    }
+    write(path, data).map_err(|x| match x.kind() {
+        ErrorKind::PermissionDenied => SerializationError::FilePermissionDenied,
+        _ => SerializationError::FileReadError,
+    })
 }

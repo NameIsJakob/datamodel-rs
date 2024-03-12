@@ -1,17 +1,22 @@
-use super::{DmHeader, Serializer, SerializingError};
-use crate::{attributes::DMAttribute, Binary, Color, DmElement, Matrix, QAngle, Quaternion, Vector2, Vector3, Vector4};
-use indexmap::IndexMap;
-use std::{ptr::read_unaligned, slice, str::from_utf8, time::Duration};
+use indexmap::IndexSet;
+use std::{mem::size_of, ptr::read_unaligned, slice::from_raw_parts, str::FromStr, time::Duration};
 use uuid::Uuid as UUID;
 
-struct DataBufferReader {
+use crate::{
+    attributes::{Attribute, BinaryData, Color, Matrix, ObjectId, QAngle, Quaternion, Vector2, Vector3, Vector4},
+    elements::Element,
+};
+
+use super::{Header, SerializationError, Serializer};
+
+struct DataReader {
     data: Vec<u8>,
     index: usize,
-    version: i32,
+    version: u8,
     string_table: Vec<String>,
 }
 
-impl DataBufferReader {
+impl DataReader {
     fn new(data: Vec<u8>) -> Self {
         Self {
             data,
@@ -21,145 +26,112 @@ impl DataBufferReader {
         }
     }
 
-    fn set_version(&mut self, version: i32) {
-        self.version = version;
-    }
-
-    fn read_string(&mut self) -> Result<&str, SerializingError> {
+    fn read_string(&mut self) -> Result<String, SerializationError> {
         let start = self.index;
-        let end = self.data[self.index..]
-            .iter()
-            .position(|&x| x == 0)
-            .ok_or(SerializingError::new("Not enough bytes to read from!"))?;
+        let end = self.data[start..].iter().position(|&x| x == 0).ok_or(SerializationError::ByteExhaustion)?;
         self.index += end + 1;
-        Ok(from_utf8(&self.data[start..start + end]).unwrap())
+        let string = String::from_utf8_lossy(&self.data[start..start + end]).into_owned();
+        Ok(string)
     }
 
-    fn read_byte(&mut self) -> Result<u8, SerializingError> {
-        let byte = self.data.get(self.index).ok_or(SerializingError::new("Not enough bytes to read from!"))?;
-        self.index += 1;
-        Ok(*byte)
+    fn read_string_array(&mut self, size: i32) -> Result<Vec<String>, SerializationError> {
+        let mut string_count = 0;
+        let mut end_index = 0;
+
+        for (index, &value) in self.data[self.index..].iter().enumerate() {
+            if value != 0 {
+                continue;
+            }
+
+            string_count += 1;
+
+            if string_count == size {
+                end_index = index;
+                break;
+            }
+        }
+
+        let string = String::from_utf8_lossy(&self.data[self.index..self.index + end_index]).into_owned();
+        self.index += end_index + 1;
+
+        Ok(string.split('\0').map(String::from).collect())
     }
 
-    fn read_bytes(&mut self, num_bytes: usize) -> Result<&[u8], SerializingError> {
-        let bytes = self
-            .data
-            .get(self.index..self.index + num_bytes)
-            .ok_or(SerializingError::new("Not enough bytes to read from!"))?;
-        self.index += num_bytes;
-        Ok(bytes)
-    }
-
-    fn read_short(&mut self) -> Result<i16, SerializingError> {
-        let bytes = self.read_bytes(2)?;
-        Ok(i16::from_le_bytes([bytes[0], bytes[1]]))
-    }
-
-    fn read_int(&mut self) -> Result<i32, SerializingError> {
-        let bytes = self.read_bytes(4)?;
-        Ok(i32::from_le_bytes([bytes[0], bytes[1], bytes[2], bytes[3]]))
-    }
-
-    fn read_id(&mut self) -> Result<UUID, SerializingError> {
-        let bytes = self.read_bytes(16)?;
-        Ok(UUID::from_bytes_le([
-            bytes[0], bytes[1], bytes[2], bytes[3], bytes[4], bytes[5], bytes[6], bytes[7], bytes[8], bytes[9], bytes[10], bytes[11], bytes[12], bytes[13],
-            bytes[14], bytes[15],
-        ]))
-    }
-
-    fn read<T>(&mut self) -> Result<T, SerializingError> {
-        let bytes = self.read_bytes(std::mem::size_of::<T>())?;
-        Ok(unsafe { read_unaligned(bytes.as_ptr() as *const T) })
-    }
-
-    fn read_array<T>(&mut self, length: usize) -> Result<&[T], SerializingError> {
-        let bytes = self.read_bytes(length * std::mem::size_of::<T>())?;
-
-        let ptr = bytes.as_ptr();
-
-        let slice = unsafe { slice::from_raw_parts(ptr as *const T, length) };
-
-        Ok(slice)
-    }
-
-    fn read_string_table(&mut self) -> Result<(), SerializingError> {
-        if self.version == 1 {
+    fn read_string_table(&mut self) -> Result<(), SerializationError> {
+        if self.version < 2 {
             return Ok(());
         }
 
-        let string_table_count = if self.version >= 4 { self.read_int()? } else { self.read_short()? as i32 };
-        for _ in 0..string_table_count {
-            let string = self.read_string()?.to_string();
-            self.string_table.push(string);
-        }
+        let string_table_count = if self.version >= 4 { self.read()? } else { self.read::<i16>()? as i32 };
+
+        self.string_table = self.read_string_array(string_table_count)?;
 
         Ok(())
     }
 
-    fn get_string(&mut self) -> Result<&str, SerializingError> {
-        if self.version == 1 {
+    fn get_string(&mut self) -> Result<String, SerializationError> {
+        if self.version < 2 {
             return self.read_string();
         }
 
-        let string_index = if self.version == 5 { self.read_int()? } else { self.read_short()? as i32 };
+        let string_index = if self.version >= 5 { self.read()? } else { self.read::<i16>()? as i32 };
+        let string = self.string_table.get(string_index as usize).ok_or(SerializationError::InvalidStringIndex)?;
+        Ok(string.clone())
+    }
 
-        Ok(self
-            .string_table
-            .get(string_index as usize)
-            .ok_or(SerializingError::new("String index out of bounds!"))?)
+    fn read<T>(&mut self) -> Result<T, SerializationError> {
+        let size = size_of::<T>();
+
+        if self.index + size > self.data.len() {
+            return Err(SerializationError::ByteExhaustion);
+        }
+
+        let value = unsafe { read_unaligned(&self.data[self.index] as *const u8 as *const T) };
+        self.index += size;
+
+        Ok(value)
+    }
+
+    fn read_array<T>(&mut self, length: i32) -> Result<&[T], SerializationError> {
+        let size = size_of::<T>() * length as usize;
+
+        if self.index + size > self.data.len() {
+            return Err(SerializationError::ByteExhaustion);
+        }
+
+        let bytes = &self.data[self.index..self.index + size];
+        let ptr = bytes.as_ptr();
+
+        self.index += size;
+        let slice = unsafe { from_raw_parts(ptr as *const T, length as usize) };
+
+        Ok(slice)
     }
 }
 
-struct DataBufferWriter {
+struct DataWriter {
     data: Vec<u8>,
-    version: i32,
-    string_table: IndexMap<String, usize>,
+    version: u8,
+    string_table: IndexSet<String>,
 }
 
-impl DataBufferWriter {
-    fn new(version: i32) -> Self {
+impl DataWriter {
+    fn new(version: u8) -> Self {
         Self {
             data: Vec::new(),
             version,
-            string_table: IndexMap::new(),
+            string_table: IndexSet::new(),
         }
     }
 
-    fn write_string(&mut self, value: String) {
-        self.data.extend_from_slice(value.as_bytes());
-        self.data.push(0);
-    }
-
-    fn write_sting_to_table(&mut self, value: String) {
-        if self.version == 1 {
-            self.write_string(value);
+    fn write_string_table(&mut self, root: &Element) {
+        if self.version < 2 {
             return;
         }
 
-        let string_index = match self.string_table.get(&value) {
-            Some(index) => *index,
-            None => {
-                panic!("String not found in string table!")
-            }
-        };
+        let mut table: IndexSet<String> = IndexSet::new();
 
-        if self.version == 5 {
-            self.write_int(string_index as i32);
-            return;
-        }
-
-        self.write_short(string_index as i16);
-    }
-
-    fn write_string_table(&mut self, element: &DmElement) {
-        if self.version == 1 {
-            return;
-        }
-
-        let mut table: IndexMap<String, usize> = IndexMap::new();
-
-        self.read_element_to_table(element, &mut table);
+        self.gather_strings(root, &mut table);
 
         if self.version >= 4 {
             self.write_int(table.len() as i32);
@@ -167,41 +139,51 @@ impl DataBufferWriter {
             self.write_short(table.len() as i16);
         }
 
-        for string in table.keys() {
-            self.write_string(string.to_string());
+        for string in table.iter() {
+            self.write_string(string.clone());
         }
 
         self.string_table = table;
     }
 
-    fn read_element_to_table(&mut self, element: &DmElement, table: &mut IndexMap<String, usize>) {
-        if !table.contains_key(element.get_class()) {
-            table.insert(element.get_class().to_string(), table.len());
-        }
+    fn gather_strings(&mut self, element: &Element, table: &mut IndexSet<String>) {
+        table.insert(element.class.clone());
 
-        if self.version >= 4 && !table.contains_key(element.get_name()) {
-            table.insert(element.get_name().to_string(), table.len());
+        if self.version >= 4 {
+            table.insert(element.name.clone());
         }
 
         for (name, value) in element.get_attributes() {
-            if !table.contains_key(name) {
-                table.insert(name.clone(), table.len());
-            }
+            table.insert(name.clone());
 
-            if let DMAttribute::String(value) = value {
+            if let Attribute::String(value) = value {
                 if self.version < 4 {
                     continue;
                 }
 
-                if !table.contains_key(value) {
-                    table.insert(value.clone(), table.len());
-                }
+                table.insert(value.clone());
             }
         }
 
-        for (_, value) in element.get_elements() {
-            self.read_element_to_table(value, table);
+        for value in element.get_elements().values() {
+            self.gather_strings(value, table);
         }
+    }
+
+    fn write_to_table(&mut self, value: String) {
+        if self.version < 2 {
+            self.write_string(value);
+            return;
+        }
+
+        let index = self.string_table.get_index_of(value.as_str()).unwrap();
+
+        if self.version >= 5 {
+            self.write_int(index as i32);
+            return;
+        }
+
+        self.write_short(index as i16);
     }
 
     fn write_byte(&mut self, value: u8) {
@@ -227,624 +209,623 @@ impl DataBufferWriter {
     fn write_id(&mut self, value: UUID) {
         self.data.extend(value.to_bytes_le());
     }
+
+    fn write_string(&mut self, value: String) {
+        self.data.extend_from_slice(value.as_bytes());
+        self.data.push(0);
+    }
 }
 
 pub struct BinarySerializer {}
 
 impl Serializer for BinarySerializer {
-    fn serialize(root: &DmElement, header: &DmHeader) -> Result<Vec<u8>, SerializingError> {
-        if header.encoding_name != "binary" {
-            return Err(SerializingError::new("Wrong Encoding For Deserialize!"));
-        }
-        if header.encoding_version < 1 || header.encoding_version > 5 {
-            return Err(SerializingError::new("Not Supported encoding version! Only 1 through 5 are supported!"));
+    fn serialize(root: &Element, header: &Header) -> Result<Vec<u8>, SerializationError> {
+        if header.encoding_string() != "binary" {
+            return Err(SerializationError::WrongDeserializer);
         }
 
-        let mut data_buffer = DataBufferWriter::new(header.encoding_version);
+        let mut writer = DataWriter::new(header.encoding_version());
 
-        data_buffer.write_string(format!(
-            "<!-- dmx encoding {} {} format {} {} -->\n",
-            header.encoding_name, header.encoding_version, header.format_name, header.format_version
-        ));
+        writer.write_string(header.to_string());
 
-        data_buffer.write_string_table(root);
+        writer.write_string_table(root);
 
-        fn collect_elements<'a>(root: &'a DmElement, elements: &mut Vec<&'a DmElement>) {
+        fn collect_elements<'a>(root: &'a Element, elements: &mut Vec<&'a Element>) {
             elements.push(root);
-            for (_, element) in root.get_elements() {
+            for element in root.get_elements().values() {
                 collect_elements(element, elements);
             }
         }
 
-        let mut elements: Vec<&DmElement> = Vec::new();
+        let mut elements = Vec::new();
         collect_elements(root, &mut elements);
 
-        data_buffer.write_int(elements.len() as i32);
+        writer.write_int(elements.len() as i32);
 
         for element in &elements {
-            data_buffer.write_sting_to_table(element.get_class().to_string());
-            if header.encoding_version >= 4 {
-                data_buffer.write_sting_to_table(element.get_name().to_string());
+            writer.write_to_table(element.class.clone());
+            if header.encoding_version() >= 4 {
+                writer.write_to_table(element.name.clone());
             } else {
-                data_buffer.write_string(element.get_name().to_string());
+                writer.write_string(element.name.clone());
             }
-            data_buffer.write_id(*element.get_id());
+            writer.write_id(element.get_id());
         }
 
         for element in &elements {
-            let attributes = element.get_attributes();
+            writer.write_int(element.get_attributes().len() as i32);
 
-            data_buffer.write_int(attributes.len() as i32);
-
-            for (name, attribute) in attributes {
-                data_buffer.write_sting_to_table(name.to_string());
+            for (name, attribute) in element.get_attributes() {
+                writer.write_to_table(name.clone());
 
                 match attribute {
-                    DMAttribute::Element(value) => {
-                        data_buffer.write_byte(1);
+                    Attribute::Element(value) => {
+                        writer.write_byte(1);
 
-                        let index = elements.iter().position(|x| x.get_id() == value).unwrap_or(usize::MAX);
-                        data_buffer.write_int(index as i32);
-                    }
-                    DMAttribute::Int(value) => {
-                        data_buffer.write_byte(2);
-
-                        data_buffer.write_int(*value);
-                    }
-                    DMAttribute::Float(value) => {
-                        data_buffer.write_byte(3);
-
-                        data_buffer.write_float(*value);
-                    }
-                    DMAttribute::Bool(value) => {
-                        data_buffer.write_byte(4);
-
-                        data_buffer.write_byte(if *value { 1 } else { 0 });
-                    }
-                    DMAttribute::String(value) => {
-                        data_buffer.write_byte(5);
-
-                        if header.encoding_version >= 4 {
-                            data_buffer.write_sting_to_table(value.to_string());
-                        } else {
-                            data_buffer.write_string(value.to_string());
+                        if value.is_nil() {
+                            writer.write_int(-1);
+                            continue;
                         }
-                    }
-                    DMAttribute::Binary(value) => {
-                        data_buffer.write_byte(6);
 
-                        data_buffer.write_int(value.data.len() as i32);
-                        data_buffer.write_bytes(&value.data);
-                    }
-                    DMAttribute::Id(value) => {
-                        if header.encoding_version < 3 {
-                            data_buffer.write_byte(7);
+                        let index = elements.iter().position(|x| x.get_id() == *value);
 
-                            data_buffer.write_id(*value);
-                        }
-                    }
-                    DMAttribute::Time(value) => {
-                        if header.encoding_version >= 3 {
-                            data_buffer.write_byte(7);
-
-                            data_buffer.write_int((value.as_secs_f64() * 10000f64) as i32);
-                        }
-                    }
-                    DMAttribute::Color(value) => {
-                        data_buffer.write_byte(8);
-
-                        data_buffer.write_byte(value.r);
-                        data_buffer.write_byte(value.g);
-                        data_buffer.write_byte(value.b);
-                        data_buffer.write_byte(value.a);
-                    }
-                    DMAttribute::Vector2(value) => {
-                        data_buffer.write_byte(9);
-
-                        data_buffer.write_float(value.x);
-                        data_buffer.write_float(value.y);
-                    }
-                    DMAttribute::Vector3(value) => {
-                        data_buffer.write_byte(10);
-
-                        data_buffer.write_float(value.x);
-                        data_buffer.write_float(value.y);
-                        data_buffer.write_float(value.z);
-                    }
-                    DMAttribute::Vector4(value) => {
-                        data_buffer.write_byte(11);
-
-                        data_buffer.write_float(value.x);
-                        data_buffer.write_float(value.y);
-                        data_buffer.write_float(value.z);
-                        data_buffer.write_float(value.w);
-                    }
-                    DMAttribute::QAngle(value) => {
-                        data_buffer.write_byte(12);
-
-                        data_buffer.write_float(value.x);
-                        data_buffer.write_float(value.y);
-                        data_buffer.write_float(value.z);
-                    }
-                    DMAttribute::Quaternion(value) => {
-                        data_buffer.write_byte(13);
-
-                        data_buffer.write_float(value.x);
-                        data_buffer.write_float(value.y);
-                        data_buffer.write_float(value.z);
-                        data_buffer.write_float(value.w);
-                    }
-                    DMAttribute::Matrix(value) => {
-                        data_buffer.write_byte(14);
-
-                        for i in value.entries.iter() {
-                            data_buffer.write_float(*i);
-                        }
-                    }
-                    DMAttribute::ElementArray(value) => {
-                        data_buffer.write_byte(15);
-
-                        data_buffer.write_int(value.len() as i32);
-                        for i in value.iter() {
-                            let index = elements.iter().position(|x| x.get_id() == i).unwrap_or(usize::MAX);
-                            data_buffer.write_int(index as i32);
-                        }
-                    }
-                    DMAttribute::IntArray(value) => {
-                        data_buffer.write_byte(16);
-
-                        data_buffer.write_int(value.len() as i32);
-                        for i in value.iter() {
-                            data_buffer.write_int(*i);
-                        }
-                    }
-                    DMAttribute::FloatArray(value) => {
-                        data_buffer.write_byte(17);
-
-                        data_buffer.write_int(value.len() as i32);
-                        for i in value.iter() {
-                            data_buffer.write_float(*i);
-                        }
-                    }
-                    DMAttribute::BoolArray(value) => {
-                        data_buffer.write_byte(18);
-
-                        data_buffer.write_int(value.len() as i32);
-                        for i in value.iter() {
-                            data_buffer.write_byte(if *i { 1 } else { 0 });
-                        }
-                    }
-                    DMAttribute::StringArray(value) => {
-                        data_buffer.write_byte(19);
-
-                        data_buffer.write_int(value.len() as i32);
-                        for i in value.iter() {
-                            if header.encoding_version >= 4 {
-                                data_buffer.write_sting_to_table(i.to_string());
-                            } else {
-                                data_buffer.write_string(i.to_string());
+                        match index {
+                            Some(index) => writer.write_int(index as i32),
+                            None => {
+                                writer.write_int(-2);
+                                writer.write_string(value.to_string());
                             }
                         }
                     }
-                    DMAttribute::BinaryArray(value) => {
-                        data_buffer.write_byte(20);
 
-                        data_buffer.write_int(value.len() as i32);
-                        for i in value.iter() {
-                            data_buffer.write_int(i.data.len() as i32);
-                            data_buffer.write_bytes(&i.data);
-                        }
+                    Attribute::Int(value) => {
+                        writer.write_byte(2);
+                        writer.write_int(*value);
                     }
-                    DMAttribute::IdArray(value) => {
-                        if header.encoding_version < 3 {
-                            data_buffer.write_byte(21);
 
-                            data_buffer.write_int(value.len() as i32);
-                            for i in value.iter() {
-                                data_buffer.write_id(*i);
+                    Attribute::Float(value) => {
+                        writer.write_byte(3);
+                        writer.write_float(*value);
+                    }
+
+                    Attribute::Bool(value) => {
+                        writer.write_byte(4);
+                        writer.write_byte(*value as u8);
+                    }
+
+                    Attribute::String(value) => {
+                        writer.write_byte(5);
+
+                        if header.encoding_version() >= 4 {
+                            writer.write_to_table(value.to_string());
+                            continue;
+                        }
+
+                        writer.write_string(value.to_string());
+                    }
+
+                    Attribute::Binary(value) => {
+                        writer.write_byte(6);
+                        writer.write_int(value.data.len() as i32);
+                        writer.write_bytes(&value.data);
+                    }
+
+                    Attribute::Id(value) => {
+                        if header.encoding_version() >= 4 {
+                            return Err(SerializationError::InvalidAttributeForVersion);
+                        }
+
+                        writer.write_byte(7);
+                        writer.write_id(value.id);
+                    }
+
+                    Attribute::Time(value) => {
+                        if header.encoding_version() < 3 {
+                            return Err(SerializationError::InvalidAttributeForVersion);
+                        }
+
+                        writer.write_byte(7);
+                        writer.write_int((value.as_millis() as f32 * 10_000_f32) as i32);
+                    }
+
+                    Attribute::Color(value) => {
+                        writer.write_byte(8);
+                        writer.write_bytes(vec![value.r, value.g, value.b, value.a].as_slice());
+                    }
+
+                    Attribute::Vector2(value) => {
+                        writer.write_byte(9);
+                        writer.write_bytes([value.x.to_le_bytes(), value.y.to_le_bytes()].concat().as_slice());
+                    }
+
+                    Attribute::Vector3(value) => {
+                        writer.write_byte(10);
+                        writer.write_bytes([value.x.to_le_bytes(), value.y.to_le_bytes(), value.z.to_le_bytes()].concat().as_slice());
+                    }
+
+                    Attribute::Vector4(value) => {
+                        writer.write_byte(11);
+                        writer.write_bytes(
+                            [value.x.to_le_bytes(), value.y.to_le_bytes(), value.z.to_le_bytes(), value.w.to_le_bytes()]
+                                .concat()
+                                .as_slice(),
+                        );
+                    }
+
+                    Attribute::QAngle(value) => {
+                        writer.write_byte(12);
+                        writer.write_bytes([value.x.to_le_bytes(), value.y.to_le_bytes(), value.z.to_le_bytes()].concat().as_slice());
+                    }
+
+                    Attribute::Quaternion(value) => {
+                        writer.write_byte(13);
+                        writer.write_bytes(
+                            [value.x.to_le_bytes(), value.y.to_le_bytes(), value.z.to_le_bytes(), value.w.to_le_bytes()]
+                                .concat()
+                                .as_slice(),
+                        );
+                    }
+
+                    Attribute::Matrix(value) => {
+                        writer.write_byte(14);
+                        writer.write_bytes(value.entries.map(|x| x.to_le_bytes()).concat().as_slice());
+                    }
+
+                    Attribute::ElementArray(value) => {
+                        writer.write_byte(15);
+                        writer.write_int(value.len() as i32);
+
+                        for element in value {
+                            if element.is_nil() {
+                                writer.write_int(-1);
+                                continue;
+                            }
+
+                            let index = elements.iter().position(|x| x.get_id() == *element);
+
+                            match index {
+                                Some(index) => writer.write_int(index as i32),
+                                None => {
+                                    writer.write_int(-2);
+                                    writer.write_string(element.to_string());
+                                }
                             }
                         }
                     }
-                    DMAttribute::TimeArray(value) => {
-                        if header.encoding_version >= 3 {
-                            data_buffer.write_byte(21);
 
-                            data_buffer.write_int(value.len() as i32);
-                            for i in value.iter() {
-                                data_buffer.write_int((i.as_secs_f64() * 10000f64) as i32);
+                    Attribute::IntArray(value) => {
+                        writer.write_byte(16);
+                        writer.write_int(value.len() as i32);
+
+                        let ptr = value.as_ptr() as *const u8;
+                        let len = value.len() * size_of::<i32>();
+
+                        let data = unsafe { from_raw_parts(ptr, len) };
+
+                        writer.write_bytes(data);
+                    }
+
+                    Attribute::FloatArray(value) => {
+                        writer.write_byte(17);
+                        writer.write_int(value.len() as i32);
+
+                        let ptr = value.as_ptr() as *const u8;
+                        let len = value.len() * size_of::<f32>();
+
+                        let data = unsafe { from_raw_parts(ptr, len) };
+
+                        writer.write_bytes(data);
+                    }
+
+                    Attribute::BoolArray(value) => {
+                        writer.write_byte(18);
+                        writer.write_int(value.len() as i32);
+
+                        let ptr = value.as_ptr() as *const u8;
+                        let len = value.len() * size_of::<bool>();
+
+                        let data = unsafe { from_raw_parts(ptr, len) };
+
+                        writer.write_bytes(data);
+                    }
+
+                    Attribute::StringArray(value) => {
+                        writer.write_byte(19);
+                        writer.write_int(value.len() as i32);
+
+                        if header.encoding_version() >= 4 {
+                            for value in value {
+                                writer.write_to_table(value.to_string());
                             }
+                            continue;
                         }
-                    }
-                    DMAttribute::ColorArray(value) => {
-                        data_buffer.write_byte(22);
 
-                        data_buffer.write_int(value.len() as i32);
-                        for i in value.iter() {
-                            data_buffer.write_byte(i.r);
-                            data_buffer.write_byte(i.g);
-                            data_buffer.write_byte(i.b);
-                            data_buffer.write_byte(i.a);
+                        for value in value {
+                            writer.write_string(value.to_string());
                         }
                     }
-                    DMAttribute::Vector2Array(value) => {
-                        data_buffer.write_byte(23);
 
-                        data_buffer.write_int(value.len() as i32);
-                        for i in value.iter() {
-                            data_buffer.write_float(i.x);
-                            data_buffer.write_float(i.y);
-                        }
-                    }
-                    DMAttribute::Vector3Array(value) => {
-                        data_buffer.write_byte(24);
+                    Attribute::BinaryArray(value) => {
+                        writer.write_byte(20);
+                        writer.write_int(value.len() as i32);
 
-                        data_buffer.write_int(value.len() as i32);
-                        for i in value.iter() {
-                            data_buffer.write_float(i.x);
-                            data_buffer.write_float(i.y);
-                            data_buffer.write_float(i.z);
+                        for value in value {
+                            writer.write_int(value.data.len() as i32);
+                            writer.write_bytes(&value.data);
                         }
                     }
-                    DMAttribute::Vector4Array(value) => {
-                        data_buffer.write_byte(25);
 
-                        data_buffer.write_int(value.len() as i32);
-                        for i in value.iter() {
-                            data_buffer.write_float(i.x);
-                            data_buffer.write_float(i.y);
-                            data_buffer.write_float(i.z);
-                            data_buffer.write_float(i.w);
+                    Attribute::IdArray(value) => {
+                        if header.encoding_version() >= 4 {
+                            return Err(SerializationError::InvalidAttributeForVersion);
                         }
-                    }
-                    DMAttribute::QAngleArray(value) => {
-                        data_buffer.write_byte(26);
 
-                        data_buffer.write_int(value.len() as i32);
-                        for i in value.iter() {
-                            data_buffer.write_float(i.x);
-                            data_buffer.write_float(i.y);
-                            data_buffer.write_float(i.z);
-                        }
-                    }
-                    DMAttribute::QuaternionArray(value) => {
-                        data_buffer.write_byte(27);
+                        writer.write_byte(21);
+                        writer.write_int(value.len() as i32);
 
-                        data_buffer.write_int(value.len() as i32);
-                        for i in value.iter() {
-                            data_buffer.write_float(i.x);
-                            data_buffer.write_float(i.y);
-                            data_buffer.write_float(i.z);
-                            data_buffer.write_float(i.w);
-                        }
-                    }
-                    DMAttribute::MatrixArray(value) => {
-                        data_buffer.write_byte(28);
+                        let ptr = value.as_ptr() as *const u8;
+                        let len = value.len() * size_of::<ObjectId>();
 
-                        data_buffer.write_int(value.len() as i32);
-                        for i in value.iter() {
-                            for j in i.entries.iter() {
-                                data_buffer.write_float(*j);
-                            }
+                        let data = unsafe { from_raw_parts(ptr, len) };
+
+                        writer.write_bytes(data);
+                    }
+
+                    Attribute::TimeArray(value) => {
+                        if header.encoding_version() < 3 {
+                            return Err(SerializationError::InvalidAttributeForVersion);
+                        }
+
+                        writer.write_byte(21);
+                        writer.write_int(value.len() as i32);
+
+                        for value in value {
+                            writer.write_int((value.as_millis() as f32 * 10_000_f32) as i32);
                         }
                     }
+
+                    Attribute::ColorArray(value) => {
+                        writer.write_byte(22);
+                        writer.write_int(value.len() as i32);
+
+                        let ptr = value.as_ptr() as *const u8;
+                        let len = value.len() * size_of::<Color>();
+
+                        let data = unsafe { from_raw_parts(ptr, len) };
+
+                        writer.write_bytes(data);
+                    }
+
+                    Attribute::Vector2Array(value) => {
+                        writer.write_byte(23);
+                        writer.write_int(value.len() as i32);
+
+                        let ptr = value.as_ptr() as *const u8;
+                        let len = value.len() * size_of::<Vector2>();
+
+                        let data = unsafe { from_raw_parts(ptr, len) };
+
+                        writer.write_bytes(data);
+                    }
+
+                    Attribute::Vector3Array(value) => {
+                        writer.write_byte(24);
+                        writer.write_int(value.len() as i32);
+
+                        let ptr = value.as_ptr() as *const u8;
+                        let len = value.len() * size_of::<Vector3>();
+
+                        let data = unsafe { from_raw_parts(ptr, len) };
+
+                        writer.write_bytes(data);
+                    }
+
+                    Attribute::Vector4Array(value) => {
+                        writer.write_byte(25);
+                        writer.write_int(value.len() as i32);
+
+                        let ptr = value.as_ptr() as *const u8;
+                        let len = value.len() * size_of::<Vector4>();
+
+                        let data = unsafe { from_raw_parts(ptr, len) };
+
+                        writer.write_bytes(data);
+                    }
+
+                    Attribute::QAngleArray(value) => {
+                        writer.write_byte(26);
+                        writer.write_int(value.len() as i32);
+
+                        let ptr = value.as_ptr() as *const u8;
+                        let len = value.len() * size_of::<QAngle>();
+
+                        let data = unsafe { from_raw_parts(ptr, len) };
+
+                        writer.write_bytes(data);
+                    }
+
+                    Attribute::QuaternionArray(value) => {
+                        writer.write_byte(27);
+                        writer.write_int(value.len() as i32);
+
+                        let ptr = value.as_ptr() as *const u8;
+                        let len = value.len() * size_of::<Quaternion>();
+
+                        let data = unsafe { from_raw_parts(ptr, len) };
+
+                        writer.write_bytes(data);
+                    }
+
+                    Attribute::MatrixArray(value) => {
+                        writer.write_byte(28);
+                        writer.write_int(value.len() as i32);
+
+                        let ptr = value.as_ptr() as *const u8;
+                        let len = value.len() * size_of::<Matrix>();
+
+                        let data = unsafe { from_raw_parts(ptr, len) };
+
+                        writer.write_bytes(data);
+                    }
+
+                    _ => continue,
                 }
             }
         }
 
-        Ok(data_buffer.data)
+        Ok(writer.data)
     }
 
-    fn deserialize(data: Vec<u8>) -> Result<DmElement, SerializingError> {
-        let mut data_buffer = DataBufferReader::new(data);
+    fn deserialize(data: Vec<u8>) -> Result<Element, SerializationError> {
+        let mut reader = DataReader::new(data);
 
-        let header_data = data_buffer.read_string()?;
-        let header = DmHeader::from_string(header_data)?;
-        if header.encoding_name != "binary" {
-            return Err(SerializingError::new("Wrong Encoding For Deserialize!"));
-        }
-        if header.encoding_version < 1 || header.encoding_version > 5 {
-            return Err(SerializingError::new("Not Supported encoding version! Only 1 through 5 are supported!"));
+        let header = Header::from_string(reader.read_string()?.as_str())?;
+
+        if header.encoding_string() != "binary" {
+            return Err(SerializationError::WrongDeserializer);
         }
 
-        data_buffer.set_version(header.encoding_version);
-        data_buffer.read_string_table()?;
+        reader.version = header.encoding_version();
 
-        let element_count = data_buffer.read_int()?;
-        let mut elements: Vec<DmElement> = Vec::new();
-        elements.reserve(element_count as usize);
+        reader.read_string_table()?;
+
+        let element_count: i32 = reader.read()?;
+        let mut elements: Vec<Element> = Vec::with_capacity(element_count as usize);
 
         for _ in 0..element_count {
-            let element_class = data_buffer.get_string()?.to_string();
-            let element_name = if header.encoding_version >= 4 {
-                data_buffer.get_string()?.to_string()
+            let element_class = reader.get_string()?;
+            let element_name = if header.encoding_version() >= 4 {
+                reader.get_string()?
             } else {
-                data_buffer.read_string()?.to_string()
+                reader.read_string()?
             };
-            let element_id = data_buffer.read_id()?;
+            let element_id: UUID = reader.read()?;
 
-            let mut element = DmElement::new(element_class, element_name);
-            element.set_id(element_id);
-
-            elements.push(element);
+            elements.push(Element::create(element_name, element_class, element_id));
         }
 
         for element_index in 0..element_count {
-            let attribute_count = data_buffer.read_int()?;
+            let attribute_count: i32 = reader.read()?;
 
             for _ in 0..attribute_count {
-                let attribute_name = data_buffer.get_string()?.to_string();
-                let attribute_type = data_buffer.read_byte()?;
+                let attribute_name = reader.get_string()?;
+                let attribute_type: u8 = reader.read()?;
 
-                match attribute_type {
+                let attribute_value: Attribute = match attribute_type {
                     1 => {
-                        let attribute_data_index = data_buffer.read_int()?;
-                        let attribute_data = match elements.get(attribute_data_index as usize) {
-                            Some(element) => *element.get_id(),
-                            None => UUID::nil(),
+                        let attribute_data_index: i32 = reader.read()?;
+                        let attribute_data = match attribute_data_index {
+                            -1 => UUID::nil(),
+                            -2 => UUID::from_str(reader.read_string()?.as_str()).map_err(|_| SerializationError::InvalidUUID)?,
+                            _ => match elements.get(attribute_data_index as usize) {
+                                Some(element) => element.get_id(),
+                                None => {
+                                    return Err(SerializationError::InvalidElementIndex);
+                                }
+                            },
                         };
-
-                        let element = elements.get_mut(element_index as usize).unwrap();
-                        element.set_element_by_id(attribute_name, attribute_data);
+                        Attribute::Element(attribute_data)
                     }
 
                     2 => {
-                        let attribute_data = data_buffer.read_int()?;
-
-                        let element = elements.get_mut(element_index as usize).unwrap();
-                        element.set_attribute(attribute_name, attribute_data);
+                        let attribute_data: i32 = reader.read()?;
+                        Attribute::Int(attribute_data)
                     }
 
                     3 => {
-                        let attribute_data = data_buffer.read::<f32>()?;
-
-                        let element_data = elements.get_mut(element_index as usize).unwrap();
-                        element_data.set_attribute(attribute_name, attribute_data);
+                        let attribute_data: f32 = reader.read()?;
+                        Attribute::Float(attribute_data)
                     }
 
                     4 => {
-                        let attribute_data = data_buffer.read::<u8>()?;
-
-                        let element_data = elements.get_mut(element_index as usize).unwrap();
-                        element_data.set_attribute(attribute_name, attribute_data != 0);
+                        let attribute_data: bool = reader.read()?;
+                        Attribute::Bool(attribute_data)
                     }
 
                     5 => {
-                        let attribute_data = if header.encoding_version >= 4 {
-                            data_buffer.get_string()?.to_string()
+                        let attribute_data = if header.encoding_version() >= 4 {
+                            reader.get_string()?
                         } else {
-                            data_buffer.read_string()?.to_string()
+                            reader.read_string()?
                         };
-
-                        let element_data = elements.get_mut(element_index as usize).unwrap();
-                        element_data.set_attribute(attribute_name, attribute_data);
+                        Attribute::String(attribute_data)
                     }
 
                     6 => {
-                        let attribute_data_length = data_buffer.read_int()?;
-                        let mut attribute_data: Vec<u8> = Vec::new();
-                        attribute_data.reserve(attribute_data_length as usize);
-                        attribute_data.extend_from_slice(data_buffer.read_bytes(attribute_data_length as usize)?);
-
-                        let element_data = elements.get_mut(element_index as usize).unwrap();
-                        element_data.set_attribute(attribute_name, Binary { data: attribute_data });
+                        let attribute_data_size: i32 = reader.read()?;
+                        let attribute_data: Vec<u8> = reader.read_array(attribute_data_size)?.to_vec();
+                        Attribute::Binary(BinaryData { data: attribute_data })
                     }
 
                     7 => {
-                        if header.encoding_version < 3 {
-                            let attribute_data = data_buffer.read::<UUID>()?;
+                        if header.encoding_version() < 3 {
+                            let attribute_data: UUID = reader.read()?;
+                            Attribute::Id(ObjectId { id: attribute_data })
+                        } else {
+                            let attribute_data_value: i32 = reader.read()?;
 
-                            let element_data = elements.get_mut(element_index as usize).unwrap();
-                            element_data.set_attribute(attribute_name, attribute_data);
-                            continue;
+                            let element_data = Duration::from_millis((attribute_data_value as f32 / 10_000_f32) as u64);
+                            Attribute::Time(element_data)
                         }
-                        let attribute_data = data_buffer.read_int()?;
-
-                        let element_data = elements.get_mut(element_index as usize).unwrap();
-                        element_data.set_attribute(attribute_name, Duration::from_micros((attribute_data as f64 / 10000f64) as u64));
                     }
 
                     8 => {
-                        let attribute_data = data_buffer.read::<Color>()?;
-
-                        let element_data = elements.get_mut(element_index as usize).unwrap();
-                        element_data.set_attribute(attribute_name, attribute_data);
+                        let attribute_data: Color = reader.read()?;
+                        Attribute::Color(attribute_data)
                     }
 
                     9 => {
-                        let attribute_data = data_buffer.read::<Vector2>()?;
-
-                        let element_data = elements.get_mut(element_index as usize).unwrap();
-                        element_data.set_attribute(attribute_name, attribute_data);
+                        let attribute_data: Vector2 = reader.read()?;
+                        Attribute::Vector2(attribute_data)
                     }
 
                     10 => {
-                        let attribute_data = data_buffer.read::<Vector3>()?;
-
-                        let element_data = elements.get_mut(element_index as usize).unwrap();
-                        element_data.set_attribute(attribute_name, attribute_data);
+                        let attribute_data: Vector3 = reader.read()?;
+                        Attribute::Vector3(attribute_data)
                     }
 
                     11 => {
-                        let attribute_data = data_buffer.read::<Vector4>()?;
-
-                        let element_data = elements.get_mut(element_index as usize).unwrap();
-                        element_data.set_attribute(attribute_name, attribute_data);
+                        let attribute_data: Vector4 = reader.read()?;
+                        Attribute::Vector4(attribute_data)
                     }
 
                     12 => {
-                        let attribute_data = data_buffer.read::<QAngle>()?;
-
-                        let element_data = elements.get_mut(element_index as usize).unwrap();
-                        element_data.set_attribute(attribute_name, attribute_data);
+                        let attribute_data: QAngle = reader.read()?;
+                        Attribute::QAngle(attribute_data)
                     }
 
                     13 => {
-                        let attribute_data = data_buffer.read::<Quaternion>()?;
-
-                        let element_data = elements.get_mut(element_index as usize).unwrap();
-                        element_data.set_attribute(attribute_name, attribute_data);
+                        let attribute_data: Quaternion = reader.read()?;
+                        Attribute::Quaternion(attribute_data)
                     }
 
                     14 => {
-                        let attribute_data = data_buffer.read::<Matrix>()?;
-
-                        let element_data = elements.get_mut(element_index as usize).unwrap();
-                        element_data.set_attribute(attribute_name, attribute_data);
+                        let attribute_data: Matrix = reader.read()?;
+                        Attribute::Matrix(attribute_data)
                     }
 
                     15 => {
-                        let attribute_array_count = data_buffer.read_int()?;
-                        let mut attribute_data: Vec<UUID> = Vec::new();
-
-                        for _ in 0..attribute_array_count {
-                            let attribute_data_index = data_buffer.read_int()?;
-                            attribute_data.push(*elements.get(attribute_data_index as usize).unwrap().get_id());
-                        }
-
-                        let element = elements.get_mut(element_index as usize).unwrap();
-                        element.set_element_array_by_id(attribute_name, attribute_data);
+                        let attribute_array_count: i32 = reader.read()?;
+                        let attribute_data_values: Vec<i32> = reader.read_array(attribute_array_count)?.to_vec();
+                        let attribute_data: Vec<UUID> = attribute_data_values
+                            .iter()
+                            .filter_map(|x| match x {
+                                // FIXME: This should not just ignore the value if an error occurs
+                                -1 => Some(UUID::nil()),
+                                -2 => {
+                                    let string = reader.read_string().ok()?;
+                                    let id = UUID::from_str(string.as_str()).ok()?;
+                                    Some(id)
+                                }
+                                _ => elements.get(*x as usize).map(|element| element.get_id()),
+                            })
+                            .collect();
+                        Attribute::ElementArray(attribute_data)
                     }
 
                     16 => {
-                        let attribute_array_count = data_buffer.read_int()?;
-                        let attribute_data = data_buffer.read_array::<i32>(attribute_array_count as usize)?.to_vec();
-
-                        let element_data = elements.get_mut(element_index as usize).unwrap();
-                        element_data.set_attribute(attribute_name, attribute_data);
+                        let attribute_array_count: i32 = reader.read()?;
+                        let attribute_data: Vec<i32> = reader.read_array(attribute_array_count)?.to_vec();
+                        Attribute::IntArray(attribute_data)
                     }
 
                     17 => {
-                        let attribute_array_count = data_buffer.read_int()?;
-                        let attribute_data = data_buffer.read_array::<f32>(attribute_array_count as usize)?.to_vec();
-
-                        let element_data = elements.get_mut(element_index as usize).unwrap();
-                        element_data.set_attribute(attribute_name, attribute_data);
+                        let attribute_array_count: i32 = reader.read()?;
+                        let attribute_data: Vec<f32> = reader.read_array(attribute_array_count)?.to_vec();
+                        Attribute::FloatArray(attribute_data)
                     }
 
                     18 => {
-                        let attribute_array_count = data_buffer.read_int()?;
-                        let attribute_data = data_buffer.read_array::<bool>(attribute_array_count as usize)?.to_vec();
-
-                        let element_data = elements.get_mut(element_index as usize).unwrap();
-                        element_data.set_attribute(attribute_name, attribute_data);
+                        let attribute_array_count: i32 = reader.read()?;
+                        let attribute_data: Vec<bool> = reader.read_array(attribute_array_count)?.to_vec();
+                        Attribute::BoolArray(attribute_data)
                     }
 
                     19 => {
-                        let attribute_array_count = data_buffer.read_int()?;
-                        let mut attribute_data: Vec<String> = Vec::new();
-                        attribute_data.reserve(attribute_array_count as usize);
-
-                        for _ in 0..attribute_array_count {
-                            let attribute_data_string = data_buffer.read_string()?.to_string();
-                            attribute_data.push(attribute_data_string);
-                        }
-
-                        let element_data = elements.get_mut(element_index as usize).unwrap();
-                        element_data.set_attribute(attribute_name, attribute_data);
+                        let attribute_array_count: i32 = reader.read()?;
+                        let attribute_data = reader.read_string_array(attribute_array_count)?;
+                        Attribute::StringArray(attribute_data)
                     }
 
                     20 => {
-                        let attribute_array_count = data_buffer.read_int()?;
-                        let mut attribute_array_data: Vec<Binary> = Vec::new();
-                        attribute_array_data.reserve(attribute_array_count as usize);
+                        let attribute_array_count: i32 = reader.read()?;
+                        let mut attribute_data: Vec<BinaryData> = Vec::with_capacity(attribute_array_count as usize);
 
                         for _ in 0..attribute_array_count {
-                            let attribute_data_length = data_buffer.read_int()?;
-                            let mut attribute_data: Vec<u8> = Vec::new();
-                            attribute_data.reserve(attribute_data_length as usize);
-
-                            attribute_data.extend_from_slice(data_buffer.read_bytes(attribute_data_length as usize)?);
-
-                            attribute_array_data.push(Binary { data: attribute_data });
+                            let attribute_data_size = reader.read::<i32>()?;
+                            let attribute_data_values: Vec<u8> = reader.read_array(attribute_data_size)?.to_vec();
+                            attribute_data.push(BinaryData { data: attribute_data_values });
                         }
 
-                        let element_data = elements.get_mut(element_index as usize).unwrap();
-                        element_data.set_attribute(attribute_name, attribute_array_data);
+                        Attribute::BinaryArray(attribute_data)
                     }
 
                     21 => {
-                        if header.encoding_version < 3 {
-                            let attribute_array_count = data_buffer.read_int()?;
-                            let attribute_data = data_buffer.read_array::<UUID>(attribute_array_count as usize)?.to_vec();
-
-                            let element_data = elements.get_mut(element_index as usize).unwrap();
-                            element_data.set_attribute(attribute_name, attribute_data);
-                            continue;
+                        if header.encoding_version() < 3 {
+                            let attribute_array_count: i32 = reader.read()?;
+                            let attribute_data_values: Vec<UUID> = reader.read_array(attribute_array_count)?.to_vec();
+                            let attribute_data = attribute_data_values.into_iter().map(|x| ObjectId { id: x }).collect();
+                            Attribute::IdArray(attribute_data)
+                        } else {
+                            let attribute_array_count: i32 = reader.read()?;
+                            let attribute_data_values: Vec<i32> = reader.read_array(attribute_array_count)?.to_vec();
+                            let attribute_data: Vec<Duration> = attribute_data_values
+                                .iter()
+                                .map(|x| Duration::from_millis(((*x as f32) / 10_000_f32) as u64))
+                                .collect();
+                            Attribute::TimeArray(attribute_data)
                         }
-
-                        let attribute_array_count = data_buffer.read_int()?;
-                        let mut attribute_data: Vec<Duration> = Vec::new();
-                        attribute_data.reserve(attribute_array_count as usize);
-
-                        for _ in 0..attribute_array_count {
-                            let attribute_data_time = data_buffer.read_int()?;
-                            attribute_data.push(Duration::from_micros((attribute_data_time as f64 / 10000f64) as u64));
-                        }
-
-                        let element_data = elements.get_mut(element_index as usize).unwrap();
-                        element_data.set_attribute(attribute_name, attribute_data);
                     }
 
                     22 => {
-                        let attribute_array_count = data_buffer.read_int()?;
-                        let attribute_data = data_buffer.read_array::<Color>(attribute_array_count as usize)?.to_vec();
-
-                        let element_data = elements.get_mut(element_index as usize).unwrap();
-                        element_data.set_attribute(attribute_name, attribute_data);
+                        let attribute_array_count: i32 = reader.read()?;
+                        let attribute_data: Vec<Color> = reader.read_array(attribute_array_count)?.to_vec();
+                        Attribute::ColorArray(attribute_data)
                     }
 
                     23 => {
-                        let attribute_array_count = data_buffer.read_int()?;
-                        let attribute_data = data_buffer.read_array::<Vector2>(attribute_array_count as usize)?.to_vec();
-
-                        let element_data = elements.get_mut(element_index as usize).unwrap();
-                        element_data.set_attribute(attribute_name, attribute_data);
+                        let attribute_array_count: i32 = reader.read()?;
+                        let attribute_data: Vec<Vector2> = reader.read_array(attribute_array_count)?.to_vec();
+                        Attribute::Vector2Array(attribute_data)
                     }
 
                     24 => {
-                        let attribute_array_count = data_buffer.read_int()?;
-                        let attribute_data = data_buffer.read_array::<Vector3>(attribute_array_count as usize)?.to_vec();
-
-                        let element_data = elements.get_mut(element_index as usize).unwrap();
-                        element_data.set_attribute(attribute_name, attribute_data);
+                        let attribute_array_count: i32 = reader.read()?;
+                        let attribute_data: Vec<Vector3> = reader.read_array(attribute_array_count)?.to_vec();
+                        Attribute::Vector3Array(attribute_data)
                     }
 
                     25 => {
-                        let attribute_array_count = data_buffer.read_int()?;
-                        let attribute_data = data_buffer.read_array::<Vector4>(attribute_array_count as usize)?.to_vec();
-
-                        let element_data = elements.get_mut(element_index as usize).unwrap();
-                        element_data.set_attribute(attribute_name, attribute_data);
+                        let attribute_array_count: i32 = reader.read()?;
+                        let attribute_data: Vec<Vector4> = reader.read_array(attribute_array_count)?.to_vec();
+                        Attribute::Vector4Array(attribute_data)
                     }
 
                     26 => {
-                        let attribute_array_count = data_buffer.read_int()?;
-                        let attribute_data = data_buffer.read_array::<QAngle>(attribute_array_count as usize)?.to_vec();
-
-                        let element_data = elements.get_mut(element_index as usize).unwrap();
-                        element_data.set_attribute(attribute_name, attribute_data);
+                        let attribute_array_count: i32 = reader.read()?;
+                        let attribute_data: Vec<QAngle> = reader.read_array(attribute_array_count)?.to_vec();
+                        Attribute::QAngleArray(attribute_data)
                     }
 
                     27 => {
-                        let attribute_array_count = data_buffer.read_int()?;
-                        let attribute_data = data_buffer.read_array::<Quaternion>(attribute_array_count as usize)?.to_vec();
-
-                        let element_data = elements.get_mut(element_index as usize).unwrap();
-                        element_data.set_attribute(attribute_name, attribute_data);
+                        let attribute_array_count: i32 = reader.read()?;
+                        let attribute_data: Vec<Quaternion> = reader.read_array(attribute_array_count)?.to_vec();
+                        Attribute::QuaternionArray(attribute_data)
                     }
 
                     28 => {
-                        let attribute_array_count = data_buffer.read_int()?;
-                        let attribute_data = data_buffer.read_array::<Matrix>(attribute_array_count as usize)?.to_vec();
-
-                        let element_data = elements.get_mut(element_index as usize).unwrap();
-                        element_data.set_attribute(attribute_name, attribute_data);
+                        let attribute_array_count: i32 = reader.read()?;
+                        let attribute_data: Vec<Matrix> = reader.read_array(attribute_array_count)?.to_vec();
+                        Attribute::MatrixArray(attribute_data)
                     }
 
                     _ => {
-                        return Err(SerializingError::new("Unknown attribute type!"));
+                        return Err(SerializationError::InvalidAttributeType);
                     }
-                }
+                };
+
+                let element = elements.get_mut(element_index as usize).unwrap();
+                element.add_attribute(attribute_name, attribute_value);
             }
         }
 
@@ -855,7 +836,7 @@ impl Serializer for BinarySerializer {
 
             let element = elements.pop().unwrap();
 
-            if let Some(index) = elements.iter().position(|x| x.has_element_attribute(*element.get_id())) {
+            if let Some(index) = elements.iter().position(|x| x.has_element_attribute(element.get_id())) {
                 elements.get_mut(index).unwrap().add_element(element);
             }
         }
