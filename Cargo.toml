@@ -12,5 +12,7 @@ readme = "README.md"
 exclude = ["tests/*"]
 
 [dependencies]
-indexmap = "2.2.5"
-uuid = { version = "1.7.0", features = ["v4", "fast-rng"] }
+indexmap = "2.2.6"
+regex = "1.10.4"
+thiserror = "1.0.60"
+uuid = { version = "1.8.0", features = ["v4", "rng", "fast-rng"] }
