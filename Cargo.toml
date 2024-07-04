@@ -9,10 +9,10 @@ license = "MIT"
 keywords = ["valve", "source-engine", "datamodel"]
 categories = ["parser-implementations"]
 readme = "README.md"
-exclude = ["tests/*"]
 
 [dependencies]
 indexmap = "2.2.6"
-regex = "1.10.4"
-thiserror = "1.0.60"
-uuid = { version = "1.8.0", features = ["v4", "rng", "fast-rng"] }
+regex = "1.10.5"
+thiserror = "1.0.61"
+uuid = { version = "1.9.1", features = ["v4", "rng", "fast-rng"] }
+
