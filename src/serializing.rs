@@ -1,7 +1,5 @@
 use std::{
-    fmt::{self, Display, Formatter},
-    fs::File,
-    io::{BufRead, BufReader, Seek},
+    io::{BufRead, Error, Write},
     num::ParseIntError,
 };
 
@@ -9,84 +7,71 @@ use regex::Regex;
 use thiserror::Error as ThisError;
 
 use crate::{
-    serializers::{BinarySerializer, KeyValues2FlatSerializer, KeyValues2Serializer, XMLFlatSerializer, XMLSerializer},
+    serializers::{
+        BinarySerializationError, BinarySerializer, KeyValues2FlatSerializer, KeyValues2Serializer, Keyvalues2SerializationError, XMLFlatSerializer,
+        XMLSerializationError, XMLSerializer,
+    },
     Element,
 };
 
 #[derive(Debug, ThisError)]
 pub enum FileHeaderError {
-    #[error("Header Had An Invalid Integer Value")]
-    InvalidInteger(#[from] ParseIntError),
-    #[error("Header Was Legacy With An Invalid Encoding")]
-    UnknownLegacyEncoding,
-    #[error("Legacy Header Has No Version")]
-    NoLegacyVersion,
+    #[error("IO error: {0}")]
+    Io(#[from] Error),
+    #[error("Integer Parse Error: {0}")]
+    ParseInt(#[from] ParseIntError),
     #[error("The Header Was In An Invalid Format")]
     InvalidFileHeader,
+    #[error("Header Was Legacy With An Invalid Encoding")]
+    UnknownLegacyEncoding,
+    #[error("Legacy Header Had No Version")]
+    NoLegacyVersion,
 }
 
-/// A repetition of the dmx header that all file start with.
+const CURRENT_ENCODING: &str = "dmx";
+const CURRENT_FORMAT_VERSION: i32 = 18;
+
+/// The header struct represents the header of a DMX file.
 #[derive(Debug, Clone)]
 pub struct Header {
-    encoding: String,
-    /// The version of encoding. You can get the current version of a serializer with [Serializer::version()]
-    pub encoding_version: i32,
     format: String,
-    /// The format of the file version.
+    /// The version of the format.
     pub format_version: i32,
 }
 
 impl Default for Header {
     fn default() -> Self {
         Self {
-            encoding: String::from(BinarySerializer::name()),
-            encoding_version: BinarySerializer::version(),
-            format: String::from("dmx"),
-            format_version: 18,
+            format: String::from(CURRENT_ENCODING),
+            format_version: CURRENT_FORMAT_VERSION,
         }
-    }
-}
-
-impl Display for Header {
-    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
-        writeln!(
-            f,
-            "<!-- dmx encoding {} {} format {} {} -->",
-            self.encoding, self.encoding_version, self.format, self.format_version,
-        )
     }
 }
 
 impl Header {
-    pub fn new<F: Into<String>, S: Serializer>(format: F, format_version: i32) -> Self {
-        Self {
-            encoding: String::from(S::name()),
-            encoding_version: S::version(),
-            format: format.into(),
-            format_version,
-        }
+    /// Creates a new header with the given format and format version.
+    /// The format is truncated to 64 characters.
+    pub fn new(format: impl Into<String>, format_version: i32) -> Self {
+        let mut format = format.into();
+        format.truncate(64);
+        Self { format, format_version }
     }
 
-    pub fn set_encoding<S: Serializer>(&mut self) {
-        self.encoding = S::name().to_string();
-        self.encoding_version = S::version();
-    }
-
-    pub fn get_encoding(&self) -> &str {
-        &self.encoding
-    }
-
-    pub fn set_format<S: Into<String>>(&mut self, format: S) {
+    /// Sets the format of the header.
+    /// The format is truncated to 64 characters.
+    pub fn set_format(&mut self, format: impl Into<String>) {
         let mut format = format.into();
         format.truncate(64);
         self.format = format;
     }
 
+    /// Returns the format of the header.
     pub fn get_format(&self) -> &str {
         &self.format
     }
 
-    pub fn from_string(value: String) -> Result<Self, FileHeaderError> {
+    /// Returns a header from a string.
+    pub fn from_string(value: String) -> Result<(Self, String, i32), FileHeaderError> {
         let header_match =
             Regex::new(r"<!-- dmx encoding (?P<encoding>(\S+)) (?P<encoding_version>(\d+)) format (?P<format>(\S+)) (?P<format_version>(\d+)) -->").unwrap();
 
@@ -97,78 +82,121 @@ impl Header {
                 let format = captures["format"].to_string();
                 let format_version = captures["format_version"].parse::<i32>()?;
 
-                Ok(Self {
-                    encoding,
-                    encoding_version,
-                    format,
-                    format_version,
-                })
+                Ok((Self::new(format, format_version), encoding, encoding_version))
             }
             None => {
                 let legacy_match = Regex::new(r"<!-- DMXVersion (?P<encoding>\S+?)(?:_v(?P<version>\S+))? -->").unwrap();
 
                 match legacy_match.captures(&value) {
-                    Some(captures) => {
-                        match &captures["encoding"] {
-                            "binary" => Ok(Self {
-                                encoding: String::from(BinarySerializer::name()),
-                                encoding_version: captures.name("version").ok_or(FileHeaderError::NoLegacyVersion)?.as_str().parse()?,
-                                format: String::from("dmx"),
+                    Some(captures) => match &captures["encoding"] {
+                        "binary" => Ok((
+                            Self {
+                                format: String::from(CURRENT_ENCODING),
+                                format_version: CURRENT_FORMAT_VERSION,
+                            },
+                            String::from("binary"),
+                            captures.name("version").ok_or(FileHeaderError::NoLegacyVersion)?.as_str().parse()?,
+                        )),
+                        "sfm" => Ok((
+                            Self {
+                                format: String::from("sfm"),
                                 format_version: 1,
-                            }),
-                            "sfm" => Ok(Self {
-                                encoding: String::from(BinarySerializer::name()),
-                                encoding_version: 1,
-                                format: String::from("dmx"), // Should this be sfm?
-                                format_version: 1,
-                            }),
-                            "keyvalues2" => Ok(Self {
-                                encoding: String::from(KeyValues2Serializer::name()),
-                                encoding_version: 1,
-                                format: String::from("dmx"),
-                                format_version: 1,
-                            }),
-                            "keyvalues2_flat" => Ok(Self {
-                                encoding: String::from(KeyValues2FlatSerializer::name()),
-                                encoding_version: 1,
-                                format: String::from("dmx"),
-                                format_version: 1,
-                            }),
-                            "xml" => Ok(Self {
-                                encoding: String::from(XMLSerializer::name()),
-                                encoding_version: 1,
-                                format: String::from("dmx"),
-                                format_version: 1,
-                            }),
-                            "xml_flat" => Ok(Self {
-                                encoding: String::from(XMLFlatSerializer::name()),
-                                encoding_version: 1,
-                                format: String::from("dmx"),
-                                format_version: 1,
-                            }),
-                            _ => Err(FileHeaderError::UnknownLegacyEncoding),
-                        }
-                    }
+                            },
+                            String::from("binary"),
+                            1,
+                        )),
+                        "keyvalues2" => Ok((
+                            Self {
+                                format: String::from(CURRENT_ENCODING),
+                                format_version: CURRENT_FORMAT_VERSION,
+                            },
+                            String::from("keyvalues2"),
+                            1,
+                        )),
+                        "keyvalues2_flat" => Ok((
+                            Self {
+                                format: String::from(CURRENT_ENCODING),
+                                format_version: CURRENT_FORMAT_VERSION,
+                            },
+                            String::from("keyvalues2_flat"),
+                            1,
+                        )),
+                        "xml" => Ok((
+                            Self {
+                                format: String::from(CURRENT_ENCODING),
+                                format_version: CURRENT_FORMAT_VERSION,
+                            },
+                            String::from("xml"),
+                            1,
+                        )),
+                        "xml_flat" => Ok((
+                            Self {
+                                format: String::from(CURRENT_ENCODING),
+                                format_version: CURRENT_FORMAT_VERSION,
+                            },
+                            String::from("xml_flat"),
+                            1,
+                        )),
+                        _ => Err(FileHeaderError::UnknownLegacyEncoding),
+                    },
                     None => Err(FileHeaderError::InvalidFileHeader),
                 }
             }
         }
     }
 
-    pub fn from_buffer(data: &mut BufReader<File>) -> Result<Self, FileHeaderError> {
+    /// Reads a header from a buffer.
+    pub fn from_buffer(buffer: &mut impl BufRead) -> Result<(Self, String, i32), FileHeaderError> {
         let mut string_buffer = Vec::new();
-        let _ = data.read_until(b'\n', &mut string_buffer);
-        let header = Self::from_string(String::from_utf8_lossy(&string_buffer).into_owned())?;
-        let _ = data.rewind();
-        Ok(header)
+        buffer.read_until(b'\n', &mut string_buffer)?;
+        Self::from_string(String::from_utf8_lossy(&string_buffer).into_owned())
+    }
+
+    /// Creates a dmx header string.
+    pub fn create_header(&self, encoding: &str, encoding_version: i32) -> String {
+        format!(
+            "<!-- dmx encoding {} {} format {} {} -->\n",
+            encoding, encoding_version, self.format, self.format_version
+        )
     }
 }
 
+#[derive(Debug, ThisError)]
+pub enum SerializationError {
+    #[error("Unknown Encoding")]
+    UnknownEncoding,
+    #[error("Header Error: {0}")]
+    Header(#[from] FileHeaderError),
+    #[error("Binary Serialization Error: {0}")]
+    Binary(#[from] BinarySerializationError),
+    #[error("KeyValues2 Serialization Error: {0}")]
+    KeyValues2(#[from] Keyvalues2SerializationError),
+    #[error("XML Serialization Error: {0}")]
+    Xml(#[from] XMLSerializationError),
+}
+
+/// Deserialize a buffer with built-in serializers.
+pub fn deserialize(buffer: &mut impl BufRead) -> Result<(Header, Element), SerializationError> {
+    let (header, encoding, version) = Header::from_buffer(buffer)?;
+
+    match encoding.as_str() {
+        "binary" => Ok((header, BinarySerializer::deserialize(buffer, encoding, version)?)),
+        "keyvalues2" => Ok((header, KeyValues2Serializer::deserialize(buffer, encoding, version)?)),
+        "keyvalues2_flat" => Ok((header, KeyValues2FlatSerializer::deserialize(buffer, encoding, version)?)),
+        "xml" => Ok((header, XMLSerializer::deserialize(buffer, encoding, version)?)),
+        "xml_flat" => Ok((header, XMLFlatSerializer::deserialize(buffer, encoding, version)?)),
+        _ => Err(SerializationError::UnknownEncoding),
+    }
+}
+
+/// A trait for serializing and deserializing elements.
 pub trait Serializer {
     type Error;
 
-    fn serialize(root: Element, header: &Header) -> Result<Vec<u8>, Self::Error>;
-    fn deserialize(data: BufReader<File>) -> Result<(Header, Element), Self::Error>;
+    /// Returns the name of the serializer.
     fn name() -> &'static str;
+    /// Returns the current version of the serializer.
     fn version() -> i32;
+    fn serialize(buffer: &mut impl Write, header: &Header, root: &Element) -> Result<(), Self::Error>;
+    fn deserialize(buffer: &mut impl BufRead, encoding: String, version: i32) -> Result<Element, Self::Error>;
 }

@@ -1,9 +1,8 @@
 use std::{
-    fs::File,
-    io::{BufRead, BufReader, Error, Read},
-    mem::{size_of, ManuallyDrop},
-    ptr::read_unaligned,
-    slice::from_raw_parts,
+    alloc::{alloc, Layout},
+    io::{BufRead, Error, Write},
+    mem::{align_of, size_of},
+    ptr::read as read_aligned,
     time::Duration,
 };
 
@@ -11,147 +10,128 @@ use indexmap::IndexSet;
 use thiserror::Error as ThisError;
 use uuid::Uuid as UUID;
 
-use crate::{
-    attributes::{Angle, Color, Matrix, Quaternion, Vector2, Vector3, Vector4},
-    serializing::FileHeaderError,
-    Attribute, AttributeError, Element, Header, Serializer,
-};
+use crate::{attribute::BinaryBlock, Attribute, Element, Header, Serializer};
 
 #[derive(Debug, ThisError)]
 pub enum BinarySerializationError {
-    #[error("Header Serializer Is Different")]
-    WrongEncoding,
-    #[error("Header Serializer Version Is Different")]
-    InvalidEncodingVersion,
-    #[error("Attributes In Header Is Not Supported By Serializer Version")]
-    InvalidAttributeForVersion,
+    #[error("IO Error: {0}")]
+    Io(#[from] Error),
     #[error("To Many Elements To Serialize")]
     TooManyElements,
-    #[error("Too Many Unique String To Serialize")]
+    #[error("To Many Strings To Serialize")]
     TooManyStrings,
     #[error("Element Has Too Many Attributes To Serialize")]
     TooManyAttributes,
-    #[error("Attribute Array To Large To Serialize")]
-    ArrayTooBig,
-    #[error("Failed To Read File")]
-    ReadFileError(#[from] Error),
-    #[error("Read Invalid String Index")]
+    #[error("Attribute Binary Data Too Long")]
+    BinaryDataTooLong,
+    #[error("Attribute Array Too Long")]
+    AttributeArrayTooLong,
+    #[error("Header Serializer Version Is Different")]
+    InvalidEncodingVersion,
+    #[error("Can't Serialize Deprecated Attribute")]
+    DeprecatedAttribute,
+    #[error("Header Serializer Is Different")]
+    WrongEncoding,
+    #[error("Invalid String Index")]
     InvalidStringIndex,
-    #[error("Failed To Read Header")]
-    InvalidHeader(#[from] FileHeaderError),
-    #[error("Attributes Type Number Not Valid Attribute")]
-    InvalidAttributeType,
-    #[error("Failed To Add Attribute To Element")]
-    FailedToAddAttribute(#[from] AttributeError),
     #[error("Element Index Was Invalid")]
     MissingElement,
+    #[error("Attributes Type Number Not Valid Attribute")]
+    InvalidAttributeType,
 }
 
-#[derive(Debug, Default)]
-struct DataWriter {
-    data: Vec<u8>,
+struct BinaryWriter<T: Write> {
+    buffer: T,
     string_table: IndexSet<String>,
 }
 
-impl DataWriter {
-    fn write_byte(&mut self, value: i8) {
-        self.data.extend(value.to_le_bytes())
+impl<T: Write> BinaryWriter<T> {
+    fn new(buffer: T) -> Self {
+        Self {
+            buffer,
+            string_table: IndexSet::new(),
+        }
     }
 
-    fn write_bytes(&mut self, value: &[u8]) {
-        self.data.extend(value)
+    fn write_byte(&mut self, value: i8) -> Result<(), BinarySerializationError> {
+        self.buffer.write_all(&value.to_le_bytes())?;
+        Ok(())
     }
 
-    fn write_short(&mut self, value: i16) {
-        self.data.extend(value.to_le_bytes())
+    fn write_bytes(&mut self, value: &[u8]) -> Result<(), BinarySerializationError> {
+        self.buffer.write_all(value)?;
+        Ok(())
     }
 
-    fn write_int(&mut self, value: i32) {
-        self.data.extend(value.to_le_bytes())
+    fn write_int(&mut self, value: i32) -> Result<(), BinarySerializationError> {
+        self.buffer.write_all(&value.to_le_bytes())?;
+        Ok(())
     }
 
     fn write_length(&mut self, value: usize) -> Result<(), BinarySerializationError> {
         if value > i32::MAX as usize {
-            return Err(BinarySerializationError::ArrayTooBig);
+            return Err(BinarySerializationError::AttributeArrayTooLong);
         }
-        self.write_int(value as i32);
+        self.write_int(value as i32)
+    }
+
+    fn write_float(&mut self, value: f32) -> Result<(), BinarySerializationError> {
+        self.buffer.write_all(&value.to_le_bytes())?;
         Ok(())
     }
 
-    fn write_float(&mut self, value: f32) {
-        self.data.extend(value.to_le_bytes())
+    fn write_uuid(&mut self, value: UUID) -> Result<(), BinarySerializationError> {
+        self.buffer.write_all(value.as_bytes())?;
+        Ok(())
     }
 
-    fn write_id(&mut self, value: UUID) {
-        self.data.extend(value.to_bytes_le())
+    fn write_string(&mut self, value: &str) -> Result<(), BinarySerializationError> {
+        self.buffer.write_all(value.as_bytes())?;
+        self.buffer.write_all(&[0])?;
+        Ok(())
     }
 
-    fn write_string(&mut self, value: &str) {
-        self.data.extend_from_slice(value.as_bytes());
-        self.data.push(0);
+    fn add_sting_to_table(&mut self, value: &str) {
+        self.string_table.insert(value.to_string());
     }
 
-    fn write_to_table(&mut self, value: &str, version: i32) -> Result<(), BinarySerializationError> {
-        if version < 2 {
-            self.write_string(value);
-            return Ok(());
-        }
-
-        let index = self.string_table.insert_full(value.to_string()).0;
-
-        if version >= 5 {
-            if index > i32::MAX as usize {
-                return Err(BinarySerializationError::TooManyStrings);
-            }
-            self.write_int(index as i32);
-            return Ok(());
-        }
-
-        if index > i16::MAX as usize {
+    fn write_string_table(&mut self) -> Result<(), BinarySerializationError> {
+        if self.string_table.len() > i32::MAX as usize {
             return Err(BinarySerializationError::TooManyStrings);
         }
-        self.write_short(index as i16);
+
+        self.write_int(self.string_table.len() as i32)?;
+
+        for string in &self.string_table {
+            self.buffer.write_all(string.as_bytes())?;
+            self.buffer.write_all(&[0])?;
+        }
+
         Ok(())
     }
 
-    fn create_string_table(&mut self, version: i32) -> Option<Self> {
-        if version < 2 {
-            return None;
-        }
-
-        let mut string_table_writer = Self::default();
-
-        if version >= 4 {
-            string_table_writer.write_int(self.string_table.len() as i32);
-        } else {
-            string_table_writer.write_short(self.string_table.len() as i16);
-        }
-
-        for string in self.string_table.iter() {
-            string_table_writer.write_string(string);
-        }
-
-        Some(string_table_writer)
+    fn write_string_index(&mut self, value: &str) -> Result<(), BinarySerializationError> {
+        let index = self.string_table.get_index_of(value).unwrap() as i32;
+        self.write_int(index)
     }
 }
 
-#[derive(Debug)]
-struct DataReader {
-    data: BufReader<File>,
+struct BinaryReader<T: BufRead> {
+    buffer: T,
     string_table: Vec<String>,
 }
 
-impl DataReader {
-    fn new(data: BufReader<File>) -> Self {
+impl<T: BufRead> BinaryReader<T> {
+    fn new(buffer: T) -> Self {
         Self {
-            data,
+            buffer,
             string_table: Vec::new(),
         }
     }
 
     fn read_string(&mut self) -> Result<String, BinarySerializationError> {
         let mut string_buffer = Vec::new();
-        let _ = self.data.read_until(0, &mut string_buffer)?;
+        let _ = self.buffer.read_until(0, &mut string_buffer)?;
         string_buffer.pop();
         let string = String::from_utf8_lossy(&string_buffer).into_owned();
         Ok(string)
@@ -192,30 +172,34 @@ impl DataReader {
         Ok(string.clone())
     }
 
-    fn read_id(&mut self) -> Result<UUID, BinarySerializationError> {
+    fn read_uuid(&mut self) -> Result<UUID, BinarySerializationError> {
         let mut buffer = [0; 16];
-        self.data.read_exact(&mut buffer)?;
+        self.buffer.read_exact(&mut buffer)?;
         let value = UUID::from_bytes_le(buffer);
         Ok(value)
     }
 
-    fn read<T>(&mut self) -> Result<T, BinarySerializationError> {
-        let size = size_of::<T>();
+    fn read<V>(&mut self) -> Result<V, BinarySerializationError> {
+        let size = size_of::<V>();
         let mut buffer = vec![0; size];
-        self.data.read_exact(&mut buffer)?;
-        let value = unsafe { read_unaligned(buffer.as_ptr() as *const T) };
+        self.buffer.read_exact(&mut buffer)?;
+        let value = unsafe { read_aligned(buffer.as_ptr() as *const V) };
         Ok(value)
     }
 
-    fn read_array<T>(&mut self, length: i32) -> Result<Vec<T>, BinarySerializationError> {
-        let size = size_of::<T>();
-        let mut buffer = vec![0; size * length as usize];
-        self.data.read_exact(&mut buffer)?;
-        let mut data = ManuallyDrop::new(buffer);
-        let ptr = data.as_mut_ptr();
-        let len = data.len() / size;
-        let cap = data.capacity() / size;
-        let value = unsafe { Vec::from_raw_parts(ptr as *mut T, len, cap) };
+    fn read_array<V>(&mut self, length: i32) -> Result<Vec<V>, BinarySerializationError> {
+        let size = size_of::<V>();
+        let align = align_of::<V>();
+        let layout = Layout::from_size_align(size * length as usize, align).unwrap();
+        let buffer_ptr = unsafe { alloc(layout) };
+        unsafe {
+            let buffer_slice = std::slice::from_raw_parts_mut(buffer_ptr, size * length as usize);
+            self.buffer.read_exact(buffer_slice)?;
+        }
+        let value = unsafe {
+            let ptr = buffer_ptr as *mut V;
+            Vec::from_raw_parts(ptr, length as usize, length as usize)
+        };
         Ok(value)
     }
 }
@@ -225,14 +209,17 @@ pub struct BinarySerializer;
 impl Serializer for BinarySerializer {
     type Error = BinarySerializationError;
 
-    fn serialize(root: Element, header: &Header) -> Result<Vec<u8>, Self::Error> {
-        if header.get_encoding() != Self::name() {
-            return Err(BinarySerializationError::WrongEncoding);
-        }
+    fn name() -> &'static str {
+        "binary"
+    }
 
-        if header.encoding_version < 1 || header.encoding_version > Self::version() {
-            return Err(BinarySerializationError::InvalidEncodingVersion);
-        }
+    fn version() -> i32 {
+        5
+    }
+
+    fn serialize(buffer: &mut impl Write, header: &Header, root: &Element) -> Result<(), Self::Error> {
+        let mut writer = BinaryWriter::new(buffer);
+        writer.write_string(&header.create_header(Self::name(), Self::version()))?;
 
         fn collect_elements(root: Element, elements: &mut IndexSet<Element>) {
             elements.insert(root.clone());
@@ -267,23 +254,33 @@ impl Serializer for BinarySerializer {
         }
 
         let mut collected_elements = IndexSet::new();
-        collect_elements(root, &mut collected_elements);
-
-        let mut writer = DataWriter::default();
+        collect_elements(root.clone(), &mut collected_elements);
 
         if collected_elements.len() > i32::MAX as usize {
             return Err(BinarySerializationError::TooManyElements);
         }
-        writer.write_int(collected_elements.len() as i32);
 
         for element in &collected_elements {
-            writer.write_to_table(&element.get_class(), header.encoding_version)?;
-            if header.encoding_version >= 4 {
-                writer.write_to_table(&element.get_name(), header.encoding_version)?;
-            } else {
-                writer.write_string(&element.get_class());
+            writer.add_sting_to_table(&element.get_class());
+            writer.add_sting_to_table(&element.get_name());
+
+            for (name, attribute) in element.get_attributes().iter() {
+                writer.add_sting_to_table(name);
+
+                if let Attribute::String(value) = attribute {
+                    writer.add_sting_to_table(value);
+                }
             }
-            writer.write_id(UUID::new_v4());
+        }
+
+        writer.write_string_table()?;
+
+        writer.write_int(collected_elements.len() as i32)?;
+
+        for element in &collected_elements {
+            writer.write_string_index(&element.get_class())?;
+            writer.write_string_index(&element.get_name())?;
+            writer.write_uuid(UUID::new_v4())?;
         }
 
         for element in &collected_elements {
@@ -291,286 +288,302 @@ impl Serializer for BinarySerializer {
             if attributes.len() > i32::MAX as usize {
                 return Err(BinarySerializationError::TooManyAttributes);
             }
-            writer.write_int(attributes.len() as i32);
+
+            writer.write_int(attributes.len() as i32)?;
 
             for (name, attribute) in attributes.iter() {
-                writer.write_to_table(name, header.encoding_version)?;
+                writer.write_string_index(name)?;
 
                 match attribute {
                     Attribute::Element(value) => {
-                        writer.write_byte(1);
+                        writer.write_byte(1)?;
 
                         let element_value = match value {
                             Some(element_value) => element_value,
                             None => {
-                                writer.write_int(-1);
+                                writer.write_int(-1)?;
                                 continue;
                             }
                         };
 
                         let index = collected_elements.get_index_of(element_value).unwrap();
 
-                        writer.write_int(index as i32);
+                        writer.write_int(index as i32)?;
                     }
                     Attribute::Integer(value) => {
-                        writer.write_byte(2);
-                        writer.write_int(*value);
+                        writer.write_byte(2)?;
+                        writer.write_int(*value)?;
                     }
                     Attribute::Float(value) => {
-                        writer.write_byte(3);
-                        writer.write_float(*value);
+                        writer.write_byte(3)?;
+                        writer.write_float(*value)?;
                     }
                     Attribute::Boolean(value) => {
-                        writer.write_byte(4);
-                        writer.write_byte(*value as i8);
+                        writer.write_byte(4)?;
+                        writer.write_byte(*value as i8)?;
                     }
                     Attribute::String(value) => {
-                        writer.write_byte(5);
+                        writer.write_byte(5)?;
 
-                        if header.encoding_version >= 4 {
-                            writer.write_to_table(value, header.encoding_version)?;
-                            continue;
-                        }
-
-                        writer.write_string(value);
+                        writer.write_string_index(value)?;
                     }
                     Attribute::Binary(value) => {
-                        writer.write_byte(6);
-                        writer.write_length(value.len())?;
-                        writer.write_bytes(value);
-                    }
-                    Attribute::ObjectId(value) => {
-                        if header.encoding_version >= 3 {
-                            return Err(BinarySerializationError::InvalidAttributeForVersion);
+                        writer.write_byte(6)?;
+                        if value.data.len() > i32::MAX as usize {
+                            return Err(BinarySerializationError::BinaryDataTooLong);
                         }
-
-                        writer.write_byte(7);
-                        writer.write_id(*value);
+                        writer.write_int(value.data.len() as i32)?;
+                        writer.write_bytes(value.data.as_slice())?;
+                    }
+                    Attribute::ObjectId(_) => {
+                        return Err(BinarySerializationError::DeprecatedAttribute);
                     }
                     Attribute::Time(value) => {
-                        if header.encoding_version < 3 {
-                            return Err(BinarySerializationError::InvalidAttributeForVersion);
-                        }
-
-                        writer.write_byte(7);
-                        writer.write_int((value.as_secs_f64() * 10_000f64) as i32);
+                        writer.write_byte(7)?;
+                        writer.write_int((value.as_secs_f64() * 10_000f64) as i32)?;
                     }
                     Attribute::Color(value) => {
-                        writer.write_byte(8);
-                        writer.write_bytes(vec![value.r, value.g, value.b, value.a].as_slice());
+                        writer.write_byte(8)?;
+                        writer.write_bytes(&[value.red, value.green, value.blue, value.alpha])?;
                     }
                     Attribute::Vector2(value) => {
-                        writer.write_byte(9);
-                        writer.write_bytes([value.x.to_le_bytes(), value.y.to_le_bytes()].concat().as_slice());
+                        writer.write_byte(9)?;
+                        writer.write_bytes([value.x.to_le_bytes(), value.y.to_le_bytes()].concat().as_slice())?;
                     }
                     Attribute::Vector3(value) => {
-                        writer.write_byte(10);
-                        writer.write_bytes([value.x.to_le_bytes(), value.y.to_le_bytes(), value.z.to_le_bytes()].concat().as_slice());
+                        writer.write_byte(10)?;
+                        writer.write_bytes([value.x.to_le_bytes(), value.y.to_le_bytes(), value.z.to_le_bytes()].concat().as_slice())?;
                     }
                     Attribute::Vector4(value) => {
-                        writer.write_byte(11);
+                        writer.write_byte(11)?;
                         writer.write_bytes(
                             [value.x.to_le_bytes(), value.y.to_le_bytes(), value.z.to_le_bytes(), value.w.to_le_bytes()]
                                 .concat()
                                 .as_slice(),
-                        );
+                        )?;
                     }
                     Attribute::Angle(value) => {
-                        writer.write_byte(12);
-                        writer.write_bytes([value.x.to_le_bytes(), value.y.to_le_bytes(), value.z.to_le_bytes()].concat().as_slice());
+                        writer.write_byte(12)?;
+                        writer.write_bytes(
+                            [value.pitch.to_le_bytes(), value.yaw.to_le_bytes(), value.roll.to_le_bytes()]
+                                .concat()
+                                .as_slice(),
+                        )?;
                     }
                     Attribute::Quaternion(value) => {
-                        writer.write_byte(13);
+                        writer.write_byte(13)?;
                         writer.write_bytes(
                             [value.x.to_le_bytes(), value.y.to_le_bytes(), value.z.to_le_bytes(), value.w.to_le_bytes()]
                                 .concat()
                                 .as_slice(),
-                        );
+                        )?;
                     }
                     Attribute::Matrix(value) => {
-                        writer.write_byte(14);
-                        let ptr = value.elements.as_ptr() as *const u8;
-                        let len = size_of::<Matrix>();
-                        let data = unsafe { from_raw_parts(ptr, len) };
-                        writer.write_bytes(data);
+                        writer.write_byte(14)?;
+                        writer.write_bytes(
+                            [
+                                value.entries[0][0].to_le_bytes(),
+                                value.entries[0][1].to_le_bytes(),
+                                value.entries[0][2].to_le_bytes(),
+                                value.entries[0][3].to_le_bytes(),
+                                value.entries[1][0].to_le_bytes(),
+                                value.entries[1][1].to_le_bytes(),
+                                value.entries[1][2].to_le_bytes(),
+                                value.entries[1][3].to_le_bytes(),
+                                value.entries[2][0].to_le_bytes(),
+                                value.entries[2][1].to_le_bytes(),
+                                value.entries[2][2].to_le_bytes(),
+                                value.entries[2][3].to_le_bytes(),
+                                value.entries[3][0].to_le_bytes(),
+                                value.entries[3][1].to_le_bytes(),
+                                value.entries[3][2].to_le_bytes(),
+                                value.entries[3][3].to_le_bytes(),
+                            ]
+                            .concat()
+                            .as_slice(),
+                        )?;
                     }
                     Attribute::ElementArray(value) => {
-                        writer.write_byte(15);
+                        writer.write_byte(15)?;
                         writer.write_length(value.len())?;
+
                         for element in value {
                             let element_value = match element {
                                 Some(element_value) => element_value,
                                 None => {
-                                    writer.write_int(-1);
+                                    writer.write_int(-1)?;
                                     continue;
                                 }
                             };
 
                             let index = collected_elements.get_index_of(element_value).unwrap();
 
-                            writer.write_int(index as i32);
+                            writer.write_int(index as i32)?;
                         }
                     }
                     Attribute::IntegerArray(value) => {
-                        writer.write_byte(16);
+                        writer.write_byte(16)?;
                         writer.write_length(value.len())?;
-                        let ptr = value.as_ptr() as *const u8;
-                        let len = value.len() * size_of::<i32>();
-                        let data = unsafe { from_raw_parts(ptr, len) };
-                        writer.write_bytes(data);
+                        for integer in value {
+                            writer.write_int(*integer)?;
+                        }
                     }
                     Attribute::FloatArray(value) => {
-                        writer.write_byte(17);
+                        writer.write_byte(17)?;
                         writer.write_length(value.len())?;
-                        let ptr = value.as_ptr() as *const u8;
-                        let len = value.len() * size_of::<f32>();
-                        let data = unsafe { from_raw_parts(ptr, len) };
-                        writer.write_bytes(data);
+                        for float in value {
+                            writer.write_float(*float)?;
+                        }
                     }
                     Attribute::BooleanArray(value) => {
-                        writer.write_byte(18);
+                        writer.write_byte(18)?;
                         writer.write_length(value.len())?;
-                        let ptr = value.as_ptr() as *const u8;
-                        let len = value.len() * size_of::<bool>();
-                        let data = unsafe { from_raw_parts(ptr, len) };
-                        writer.write_bytes(data);
+                        for boolean in value {
+                            writer.write_byte(*boolean as i8)?;
+                        }
                     }
                     Attribute::StringArray(value) => {
-                        writer.write_byte(19);
+                        writer.write_byte(19)?;
                         writer.write_length(value.len())?;
-                        for value in value {
-                            writer.write_string(value);
+                        for string in value {
+                            writer.write_string(string)?;
                         }
                     }
                     Attribute::BinaryArray(value) => {
-                        writer.write_byte(20);
-                        if value.len() > i32::MAX as usize {
-                            return Err(BinarySerializationError::ArrayTooBig);
-                        }
+                        writer.write_byte(20)?;
                         writer.write_length(value.len())?;
-                        for value in value {
-                            writer.write_length(value.len())?;
-                            writer.write_bytes(value);
+                        for binary in value {
+                            if binary.data.len() > i32::MAX as usize {
+                                return Err(BinarySerializationError::BinaryDataTooLong);
+                            }
+                            writer.write_int(binary.data.len() as i32)?;
+                            writer.write_bytes(binary.data.as_slice())?;
                         }
                     }
-                    Attribute::ObjectIdArray(value) => {
-                        if header.encoding_version >= 3 {
-                            return Err(BinarySerializationError::InvalidAttributeForVersion);
-                        }
-                        writer.write_byte(21);
-                        writer.write_length(value.len())?;
-                        let ptr = value.as_ptr() as *const u8;
-                        let len = value.len() * size_of::<UUID>();
-                        let data = unsafe { from_raw_parts(ptr, len) };
-                        writer.write_bytes(data);
+                    Attribute::ObjectIdArray(_) => {
+                        return Err(BinarySerializationError::DeprecatedAttribute);
                     }
                     Attribute::TimeArray(value) => {
-                        if header.encoding_version < 3 {
-                            return Err(BinarySerializationError::InvalidAttributeForVersion);
-                        }
-                        writer.write_byte(21);
+                        writer.write_byte(21)?;
                         writer.write_length(value.len())?;
-                        for value in value {
-                            writer.write_int((value.as_secs_f64() * 10_000f64) as i32);
+                        for time in value {
+                            writer.write_int((time.as_secs_f64() * 10_000f64) as i32)?;
                         }
                     }
                     Attribute::ColorArray(value) => {
-                        writer.write_byte(22);
+                        writer.write_byte(22)?;
                         writer.write_length(value.len())?;
-                        let ptr = value.as_ptr() as *const u8;
-                        let len = value.len() * size_of::<Color>();
-                        let data = unsafe { from_raw_parts(ptr, len) };
-                        writer.write_bytes(data);
+                        for color in value {
+                            writer.write_bytes(&[color.red, color.green, color.blue, color.alpha])?;
+                        }
                     }
                     Attribute::Vector2Array(value) => {
-                        writer.write_byte(23);
+                        writer.write_byte(23)?;
                         writer.write_length(value.len())?;
-                        let ptr = value.as_ptr() as *const u8;
-                        let len = value.len() * size_of::<Vector2>();
-                        let data = unsafe { from_raw_parts(ptr, len) };
-                        writer.write_bytes(data);
+                        for vector in value {
+                            writer.write_bytes([vector.x.to_le_bytes(), vector.y.to_le_bytes()].concat().as_slice())?;
+                        }
                     }
                     Attribute::Vector3Array(value) => {
-                        writer.write_byte(24);
+                        writer.write_byte(24)?;
                         writer.write_length(value.len())?;
-                        let ptr = value.as_ptr() as *const u8;
-                        let len = value.len() * size_of::<Vector3>();
-                        let data = unsafe { from_raw_parts(ptr, len) };
-                        writer.write_bytes(data);
+                        for vector in value {
+                            writer.write_bytes([vector.x.to_le_bytes(), vector.y.to_le_bytes(), vector.z.to_le_bytes()].concat().as_slice())?;
+                        }
                     }
                     Attribute::Vector4Array(value) => {
-                        writer.write_byte(25);
+                        writer.write_byte(25)?;
                         writer.write_length(value.len())?;
-                        let ptr = value.as_ptr() as *const u8;
-                        let len = value.len() * size_of::<Vector4>();
-                        let data = unsafe { from_raw_parts(ptr, len) };
-                        writer.write_bytes(data);
+                        for vector in value {
+                            writer.write_bytes(
+                                [vector.x.to_le_bytes(), vector.y.to_le_bytes(), vector.z.to_le_bytes(), vector.w.to_le_bytes()]
+                                    .concat()
+                                    .as_slice(),
+                            )?;
+                        }
                     }
                     Attribute::AngleArray(value) => {
-                        writer.write_byte(26);
+                        writer.write_byte(26)?;
                         writer.write_length(value.len())?;
-                        let ptr = value.as_ptr() as *const u8;
-                        let len = value.len() * size_of::<Angle>();
-                        let data = unsafe { from_raw_parts(ptr, len) };
-                        writer.write_bytes(data);
+                        for angle in value {
+                            writer.write_bytes(
+                                [angle.pitch.to_le_bytes(), angle.yaw.to_le_bytes(), angle.roll.to_le_bytes()]
+                                    .concat()
+                                    .as_slice(),
+                            )?;
+                        }
                     }
                     Attribute::QuaternionArray(value) => {
-                        writer.write_byte(27);
+                        writer.write_byte(27)?;
                         writer.write_length(value.len())?;
-                        let ptr = value.as_ptr() as *const u8;
-                        let len = value.len() * size_of::<Quaternion>();
-                        let data = unsafe { from_raw_parts(ptr, len) };
-                        writer.write_bytes(data);
+                        for quaternion in value {
+                            writer.write_bytes(
+                                [
+                                    quaternion.x.to_le_bytes(),
+                                    quaternion.y.to_le_bytes(),
+                                    quaternion.z.to_le_bytes(),
+                                    quaternion.w.to_le_bytes(),
+                                ]
+                                .concat()
+                                .as_slice(),
+                            )?;
+                        }
                     }
                     Attribute::MatrixArray(value) => {
-                        writer.write_byte(28);
+                        writer.write_byte(28)?;
                         writer.write_length(value.len())?;
-                        let ptr = value.as_ptr() as *const u8;
-                        let len = value.len() * size_of::<Matrix>();
-                        let data = unsafe { from_raw_parts(ptr, len) };
-                        writer.write_bytes(data);
+                        for matrix in value {
+                            writer.write_bytes(
+                                [
+                                    matrix.entries[0][0].to_le_bytes(),
+                                    matrix.entries[0][1].to_le_bytes(),
+                                    matrix.entries[0][2].to_le_bytes(),
+                                    matrix.entries[0][3].to_le_bytes(),
+                                    matrix.entries[1][0].to_le_bytes(),
+                                    matrix.entries[1][1].to_le_bytes(),
+                                    matrix.entries[1][2].to_le_bytes(),
+                                    matrix.entries[1][3].to_le_bytes(),
+                                    matrix.entries[2][0].to_le_bytes(),
+                                    matrix.entries[2][1].to_le_bytes(),
+                                    matrix.entries[2][2].to_le_bytes(),
+                                    matrix.entries[2][3].to_le_bytes(),
+                                    matrix.entries[3][0].to_le_bytes(),
+                                    matrix.entries[3][1].to_le_bytes(),
+                                    matrix.entries[3][2].to_le_bytes(),
+                                    matrix.entries[3][3].to_le_bytes(),
+                                ]
+                                .concat()
+                                .as_slice(),
+                            )?;
+                        }
                     }
                 }
             }
         }
 
-        let mut file_header = DataWriter::default();
-        file_header.write_string(&header.to_string());
-
-        if let Some(table) = writer.create_string_table(header.encoding_version) {
-            file_header.data.extend(table.data)
-        }
-
-        file_header.data.extend(writer.data);
-
-        Ok(file_header.data)
+        Ok(())
     }
 
-    fn deserialize(data: BufReader<File>) -> Result<(Header, Element), Self::Error> {
-        let mut reader = DataReader::new(data);
-
-        let header = Header::from_string(reader.read_string()?)?;
-
-        if header.get_encoding() != Self::name() {
+    fn deserialize(buffer: &mut impl BufRead, encoding: String, version: i32) -> Result<Element, Self::Error> {
+        if encoding != Self::name() {
             return Err(BinarySerializationError::WrongEncoding);
         }
 
-        if header.encoding_version < 1 || header.encoding_version > Self::version() {
+        if version < 1 || version > Self::version() {
             return Err(BinarySerializationError::InvalidEncodingVersion);
         }
 
-        reader.read_string_table(header.encoding_version)?;
+        let mut reader = BinaryReader::new(buffer);
+        reader.read::<u8>()?; // Skip byte from header
+
+        reader.read_string_table(version)?;
         let element_count = reader.read()?;
         let mut elements = Vec::with_capacity(element_count as usize);
 
         for _ in 0..element_count {
-            let element_class = reader.get_string(header.encoding_version)?;
-            let element_name = if header.encoding_version >= 4 {
-                reader.get_string(header.encoding_version)?
-            } else {
-                reader.read_string()?
-            };
-            reader.read_id()?;
+            let element_class = reader.get_string(version)?;
+            let element_name = if version >= 4 { reader.get_string(version)? } else { reader.read_string()? };
+            reader.read_uuid()?;
 
             elements.push(Element::create(element_name, element_class));
         }
@@ -578,8 +591,9 @@ impl Serializer for BinarySerializer {
         for element_index in 0..element_count {
             let attribute_count = reader.read()?;
             let mut element = elements.get(element_index as usize).unwrap().clone();
+
             for _ in 0..attribute_count {
-                let attribute_name = reader.get_string(header.encoding_version)?;
+                let attribute_name = reader.get_string(version)?;
                 let attribute_type = reader.read::<i8>()?;
 
                 let attribute_value = match attribute_type {
@@ -598,20 +612,18 @@ impl Serializer for BinarySerializer {
                     3 => Attribute::Float(reader.read()?),
                     4 => Attribute::Boolean(reader.read()?),
                     5 => {
-                        let attribute_data = if header.encoding_version >= 4 {
-                            reader.get_string(header.encoding_version)?
-                        } else {
-                            reader.read_string()?
-                        };
+                        let attribute_data = if version >= 4 { reader.get_string(version)? } else { reader.read_string()? };
                         Attribute::String(attribute_data)
                     }
                     6 => {
                         let attribute_data_size = reader.read()?;
-                        Attribute::Binary(reader.read_array(attribute_data_size)?)
+                        Attribute::Binary(BinaryBlock {
+                            data: reader.read_array(attribute_data_size)?,
+                        })
                     }
                     7 => {
-                        if header.encoding_version < 3 {
-                            Attribute::ObjectId(reader.read_id()?)
+                        if version < 3 {
+                            Attribute::ObjectId(reader.read_uuid()?)
                         } else {
                             let attribute_data_value = reader.read::<i32>()?;
                             let element_data = Duration::from_secs_f64(attribute_data_value as f64 / 10_000f64);
@@ -664,17 +676,19 @@ impl Serializer for BinarySerializer {
 
                         for _ in 0..attribute_array_count {
                             let attribute_data_size = reader.read()?;
-                            attribute_data.push(reader.read_array(attribute_data_size)?);
+                            attribute_data.push(BinaryBlock {
+                                data: reader.read_array(attribute_data_size)?,
+                            });
                         }
 
                         Attribute::BinaryArray(attribute_data)
                     }
                     21 => {
-                        if header.encoding_version < 3 {
+                        if version < 3 {
                             let attribute_array_count = reader.read()?;
                             let mut attribute_data = Vec::with_capacity(attribute_array_count as usize);
                             for _ in 0..attribute_array_count {
-                                attribute_data.push(reader.read_id()?);
+                                attribute_data.push(reader.read_uuid()?);
                             }
                             Attribute::ObjectIdArray(attribute_data)
                         } else {
@@ -715,18 +729,10 @@ impl Serializer for BinarySerializer {
                     _ => return Err(BinarySerializationError::InvalidAttributeType),
                 };
 
-                element.set_attribute(attribute_name, attribute_value)?;
+                element.set_attribute(attribute_name, attribute_value);
             }
         }
 
-        Ok((header, elements.remove(0)))
-    }
-
-    fn name() -> &'static str {
-        "binary"
-    }
-
-    fn version() -> i32 {
-        5
+        Ok(elements.remove(0))
     }
 }

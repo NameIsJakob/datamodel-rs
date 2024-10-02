@@ -6,9 +6,13 @@ use std::{
 
 use indexmap::IndexMap;
 
-use crate::{attribute::AttributeError, Attribute};
+use crate::Attribute;
 
-/// The main structure to hold attributes.
+/// The element struct represents a single element in the data model.
+///
+/// It contains a name, a class, and a set of attributes.
+///
+/// A element can have multiple references to multiple attributes.
 #[derive(Clone, Debug)]
 pub struct Element {
     name: Rc<RefCell<String>>,
@@ -21,10 +25,12 @@ impl Default for Element {
         Self {
             name: Rc::new(RefCell::new(String::from("unnamed"))),
             class: Rc::new(RefCell::new(String::from("DmElement"))),
-            attributes: Default::default(),
+            attributes: Rc::new(RefCell::new(IndexMap::new())),
         }
     }
 }
+
+impl Eq for Element {}
 
 impl Hash for Element {
     fn hash<H: Hasher>(&self, state: &mut H) {
@@ -40,20 +46,9 @@ impl PartialEq for Element {
     }
 }
 
-impl Eq for Element {}
-
 impl Element {
-    /// Creates a new element with a name and class specified.
-    pub fn create<N: Into<String>, C: Into<String>>(name: N, class: C) -> Self {
-        Self {
-            name: Rc::new(RefCell::new(name.into())),
-            class: Rc::new(RefCell::new(class.into())),
-            attributes: Default::default(),
-        }
-    }
-
-    /// Creates a new element with a name with the default class "DmElement".
-    pub fn new<N: Into<String>>(name: N) -> Self {
+    /// Creates a new element with a default class with the given name.
+    pub fn named(name: impl Into<String>) -> Self {
         Self {
             name: Rc::new(RefCell::new(name.into())),
             class: Rc::new(RefCell::new(String::from("DmElement"))),
@@ -61,8 +56,17 @@ impl Element {
         }
     }
 
-    /// Creates a nameless new element with a class.
-    pub fn class<C: Into<String>>(class: C) -> Self {
+    /// Creates a new element with the given name and class.
+    pub fn create(name: impl Into<String>, class: impl Into<String>) -> Self {
+        Self {
+            name: Rc::new(RefCell::new(name.into())),
+            class: Rc::new(RefCell::new(class.into())),
+            attributes: Default::default(),
+        }
+    }
+
+    /// Creates a new nameless element with the given class.
+    pub fn class(class: impl Into<String>) -> Self {
         Self {
             name: Rc::new(RefCell::new(String::from("unnamed"))),
             class: Rc::new(RefCell::new(class.into())),
@@ -70,71 +74,94 @@ impl Element {
         }
     }
 
-    /// Returns a reference to the element name.
-    pub fn get_name(&self) -> Ref<String> {
+    /// Returns the name of the element.
+    pub fn get_name(&self) -> Ref<'_, String> {
         self.name.borrow()
     }
 
     /// Sets the name of the element.
-    pub fn set_name<S: Into<String>>(&mut self, name: S) {
-        let element_name = name.into();
-        *self.name.borrow_mut() = element_name;
+    pub fn set_name(&mut self, name: impl Into<String>) {
+        *self.name.borrow_mut() = name.into();
     }
 
-    /// Returns a reference to the class.
-    pub fn get_class(&self) -> Ref<String> {
+    /// Returns the class of the element.
+    pub fn get_class(&self) -> Ref<'_, String> {
         self.class.borrow()
     }
 
     /// Sets the class of the element.
-    pub fn set_class<S: Into<String>>(&mut self, class: S) {
-        let element_class = class.into();
-        *self.class.borrow_mut() = element_class;
+    pub fn set_class(&mut self, class: impl Into<String>) {
+        *self.class.borrow_mut() = class.into();
     }
 
-    /// Add or set an attribute to the element.
-    ///
-    /// Attributes names can't be empty, be "name", or "id" as they are reserved.
-    ///
-    /// The elements can't have references to them self.
-    pub fn set_attribute<S: Into<String>, A: Into<Attribute>>(&mut self, name: S, value: A) -> Result<(), AttributeError> {
+    /// Returns the attribute with the given name. If the attribute does not exist, returns None.
+    pub fn get_attribute(&self, name: impl AsRef<str>) -> Option<Ref<'_, Attribute>> {
+        let attribute_name = name.as_ref();
+
+        match attribute_name {
+            "name" => None,
+            "id" => None,
+            _ => Ref::filter_map(self.attributes.borrow(), |attributes| attributes.get(attribute_name)).ok(),
+        }
+    }
+
+    /// Returns the value of the attribute with the given name. If the attribute does not exist or is not the same type, returns None.
+    pub fn get_value<V>(&self, name: impl AsRef<str>) -> Option<Ref<'_, V>>
+    where
+        for<'a> &'a V: TryFrom<&'a Attribute>,
+    {
+        let attribute_name = name.as_ref();
+
+        match attribute_name {
+            "name" => None,
+            "id" => None,
+            _ => Ref::filter_map(self.attributes.borrow(), |attributes| attributes.get(attribute_name)?.try_into().ok()).ok(),
+        }
+    }
+
+    /// Sets the attribute with the given name.
+    pub fn set_attribute(&mut self, name: impl Into<String>, attribute: Attribute) {
         let attribute_name = name.into();
 
-        if attribute_name.is_empty() {
-            return Err(AttributeError::EmptyAttributeName);
+        match attribute_name.as_str() {
+            "name" => return,
+            "id" => return,
+            _ => {}
         }
 
-        if &attribute_name == "name" || &attribute_name == "id" {
-            return Err(AttributeError::ReservedAttributeName);
+        self.attributes.borrow_mut().insert(attribute_name, attribute);
+    }
+
+    /// Sets the value of the attribute with the given name.
+    pub fn set_value(&mut self, name: impl Into<String>, value: impl Into<Attribute>) {
+        self.set_attribute(name, value.into());
+    }
+
+    /// Removes the attribute with the given name and returns it. If the attribute does not exist, returns None.
+    pub fn remove_attribute(&mut self, name: impl AsRef<str>) -> Option<Attribute> {
+        let attribute_name = name.as_ref();
+
+        match attribute_name {
+            "name" => None,
+            "id" => None,
+            _ => self.attributes.borrow_mut().shift_remove(attribute_name),
         }
-
-        let attribute_value = value.into();
-
-        // TODO: Check for recursion!
-
-        self.attributes.borrow_mut().insert(attribute_name, attribute_value);
-        Ok(())
     }
 
-    /// Remove an attribute from element.
-    ///
-    /// returns bool if an attribute was removed.
-    pub fn remove_attribute(&mut self, name: &str) -> bool {
-        self.attributes.borrow_mut().shift_remove(name).is_some()
+    /// Removes the value of the attribute with the given name and returns it. If the attribute does not exist or is not the same type, returns None.
+    pub fn remove_value<V: TryFrom<Attribute>>(&mut self, name: impl AsRef<str>) -> Option<V> {
+        let attribute = self.remove_attribute(name)?;
+
+        V::try_from(attribute).ok()
     }
 
-    /// Get an attribute value from element.
-    pub fn get_attribute<A: TryFrom<Attribute, Error = AttributeError>>(&self, name: &str) -> Result<A, AttributeError> {
-        self.attributes.borrow().get(name).ok_or(AttributeError::MissingAttribute)?.clone().try_into()
-    }
-
-    /// Check if an attribute is in element.
-    pub fn has_attribute(&self, name: &str) -> bool {
-        self.attributes.borrow().contains_key(name)
-    }
-
-    /// Returns a reference to all attributes to element.
-    pub fn get_attributes(&self) -> Ref<IndexMap<String, Attribute>> {
+    /// Returns the attributes of the element.
+    pub fn get_attributes(&self) -> Ref<'_, IndexMap<String, Attribute>> {
         self.attributes.borrow()
+    }
+
+    /// Reserves capacity for at least additional more elements to be inserted in the given attributes.
+    pub fn reserve_attributes(&mut self, additional: usize) {
+        self.attributes.borrow_mut().reserve(additional);
     }
 }
