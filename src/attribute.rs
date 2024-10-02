@@ -155,6 +155,34 @@ macro_rules! declare_attribute {
     };
 }
 
+impl From<Element> for Attribute {
+    fn from(value: Element) -> Self {
+        Attribute::Element(Some(value))
+    }
+}
+
+impl TryFrom<Attribute> for Element {
+    type Error = ();
+
+    fn try_from(value: Attribute) -> Result<Self, Self::Error> {
+        match value {
+            Attribute::Element(value) => Ok(value.ok_or(())?),
+            _ => Err(()),
+        }
+    }
+}
+
+impl<'a> TryFrom<&'a Attribute> for &'a Element {
+    type Error = ();
+
+    fn try_from(value: &'a Attribute) -> Result<Self, Self::Error> {
+        match value {
+            Attribute::Element(value) => Ok(value.as_ref().ok_or(())?),
+            _ => Err(()),
+        }
+    }
+}
+
 declare_attribute!(Option<Element>, Attribute::Element, Attribute::ElementArray);
 declare_attribute!(i32, Attribute::Integer, Attribute::IntegerArray);
 declare_attribute!(f32, Attribute::Float, Attribute::FloatArray);
