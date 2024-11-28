@@ -165,6 +165,11 @@ impl<T: BufRead> BinaryReader<T> {
         }
 
         let string_index = if version >= 5 { self.read()? } else { self.read::<i16>()? as i32 };
+
+        if string_index == -1 {
+            return Ok(String::from("unnamed"));
+        }
+
         let string = self
             .string_table
             .get(string_index as usize)
