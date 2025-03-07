@@ -8,6 +8,7 @@ use crate::Element;
 #[derive(Clone, Debug)]
 pub enum Attribute {
     Element(Option<Element>),
+    UInt64(u64),
     Integer(i32),
     Float(f32),
     Boolean(bool),
@@ -24,6 +25,7 @@ pub enum Attribute {
     Matrix(Matrix),
 
     ElementArray(Vec<Option<Element>>),
+    UInt64Array(Vec<u64>),
     IntegerArray(Vec<i32>),
     FloatArray(Vec<f32>),
     BooleanArray(Vec<bool>),
@@ -184,6 +186,7 @@ impl<'a> TryFrom<&'a Attribute> for &'a Element {
 }
 
 declare_attribute!(Option<Element>, Attribute::Element, Attribute::ElementArray);
+declare_attribute!(u64, Attribute::UInt64, Attribute::UInt64Array);
 declare_attribute!(i32, Attribute::Integer, Attribute::IntegerArray);
 declare_attribute!(f32, Attribute::Float, Attribute::FloatArray);
 declare_attribute!(bool, Attribute::Boolean, Attribute::BooleanArray);
