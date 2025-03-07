@@ -7,10 +7,7 @@ use regex::Regex;
 use thiserror::Error as ThisError;
 
 use crate::{
-    serializers::{
-        BinarySerializationError, BinarySerializer, KeyValues2FlatSerializer, KeyValues2Serializer, Keyvalues2SerializationError, XMLFlatSerializer,
-        XMLSerializationError, XMLSerializer,
-    },
+    serializers::{BinarySerializationError, BinarySerializer, KeyValues2FlatSerializer, KeyValues2Serializer, Keyvalues2SerializationError},
     Element,
 };
 
@@ -121,22 +118,6 @@ impl Header {
                             String::from("keyvalues2_flat"),
                             1,
                         )),
-                        "xml" => Ok((
-                            Self {
-                                format: String::from(CURRENT_ENCODING),
-                                format_version: CURRENT_FORMAT_VERSION,
-                            },
-                            String::from("xml"),
-                            1,
-                        )),
-                        "xml_flat" => Ok((
-                            Self {
-                                format: String::from(CURRENT_ENCODING),
-                                format_version: CURRENT_FORMAT_VERSION,
-                            },
-                            String::from("xml_flat"),
-                            1,
-                        )),
                         _ => Err(FileHeaderError::UnknownLegacyEncoding),
                     },
                     None => Err(FileHeaderError::InvalidFileHeader),
@@ -171,8 +152,6 @@ pub enum SerializationError {
     Binary(#[from] BinarySerializationError),
     #[error("KeyValues2 Serialization Error: {0}")]
     KeyValues2(#[from] Keyvalues2SerializationError),
-    #[error("XML Serialization Error: {0}")]
-    Xml(#[from] XMLSerializationError),
 }
 
 /// Deserialize a buffer with built-in serializers.
@@ -183,8 +162,6 @@ pub fn deserialize(buffer: &mut impl BufRead) -> Result<(Header, Element), Seria
         "binary" => Ok((header, BinarySerializer::deserialize(buffer, encoding, version)?)),
         "keyvalues2" => Ok((header, KeyValues2Serializer::deserialize(buffer, encoding, version)?)),
         "keyvalues2_flat" => Ok((header, KeyValues2FlatSerializer::deserialize(buffer, encoding, version)?)),
-        "xml" => Ok((header, XMLSerializer::deserialize(buffer, encoding, version)?)),
-        "xml_flat" => Ok((header, XMLFlatSerializer::deserialize(buffer, encoding, version)?)),
         _ => Err(SerializationError::UnknownEncoding),
     }
 }
