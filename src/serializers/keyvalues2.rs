@@ -456,207 +456,245 @@ impl<T: Write> StringWriter<T> {
     }
 }
 
-struct StringReader<T: BufRead> {
-    buffer: T,
-    current_line: String,
+struct StringReader<B: BufRead> {
+    buffer: B,
     line_count: usize,
+    current_line: String,
+    cursor_position: usize,
 }
 
-impl<T: BufRead> StringReader<T> {
-    fn new(buffer: T) -> Self {
+impl<B: BufRead> StringReader<B> {
+    fn new(buffer: B) -> Self {
         Self {
             buffer,
+            line_count: 0,
             current_line: String::new(),
-            line_count: 1,
+            cursor_position: 0,
         }
     }
 
     fn next_token(&mut self) -> Result<Option<StringToken>, Keyvalues2SerializationError> {
-        if self.current_line.is_empty() {
-            let new_line = self.new_line()?;
-            if new_line.is_none() {
-                return Ok(None);
-            }
+        if self.current_line.len() == self.cursor_position {
+            let new_line = match self.next_line()? {
+                Some(line) => line,
+                None => return Ok(None),
+            };
+            self.current_line = new_line;
+            self.cursor_position = 0;
+            self.line_count += 1;
         }
 
-        let mut characters = self.current_line.chars();
-
-        #[allow(unused_assignments)]
+        let mut line_characters = self.current_line.chars().skip(self.cursor_position);
         let mut token = None;
-        let mut string_token: Option<String> = None;
+
         let mut escaped = false;
         let mut commented = false;
 
         loop {
-            let character = characters.next();
-
-            match character {
+            let current_character = line_characters.next();
+            self.cursor_position += 1;
+            match current_character {
                 Some('"') => {
-                    if let Some(ref mut string) = string_token {
+                    if let Some(StringToken::String(ref mut string_token)) = token {
                         if escaped {
-                            string.push('"');
+                            string_token.push('\"');
                             escaped = false;
                             continue;
                         }
-
-                        token = Some(StringToken::String(std::mem::take(string)));
                         break;
-                    }
-
-                    string_token = Some(String::new());
-                }
-                Some('{') => {
-                    if let Some(ref mut string) = string_token {
-                        if escaped {
-                            return Err(Keyvalues2SerializationError::UnknownEscapeCharacter('{', self.line_count));
-                        }
-
-                        string.push('{');
-                        continue;
-                    }
-                    token = Some(StringToken::OpenBrace);
-                    break;
-                }
-                Some('}') => {
-                    if let Some(ref mut string) = string_token {
-                        if escaped {
-                            return Err(Keyvalues2SerializationError::UnknownEscapeCharacter('}', self.line_count));
-                        }
-
-                        string.push('}');
-                        continue;
-                    }
-                    token = Some(StringToken::CloseBrace);
-                    break;
-                }
-                Some('[') => {
-                    if let Some(ref mut string) = string_token {
-                        if escaped {
-                            return Err(Keyvalues2SerializationError::UnknownEscapeCharacter('[', self.line_count));
-                        }
-
-                        string.push('[');
-                        continue;
-                    }
-                    token = Some(StringToken::OpenBracket);
-                    break;
-                }
-                Some(']') => {
-                    if let Some(ref mut string) = string_token {
-                        if escaped {
-                            return Err(Keyvalues2SerializationError::UnknownEscapeCharacter(']', self.line_count));
-                        }
-
-                        string.push(']');
-                        continue;
-                    }
-                    token = Some(StringToken::CloseBracket);
-                    break;
-                }
-                Some(',') => {
-                    if let Some(ref mut string) = string_token {
-                        if escaped {
-                            return Err(Keyvalues2SerializationError::UnknownEscapeCharacter(',', self.line_count));
-                        }
-
-                        string.push(',');
-                        continue;
-                    }
-                    continue;
-                }
-                Some('\\') => {
-                    if let Some(ref mut string) = string_token {
-                        if !escaped {
-                            escaped = true;
-                            continue;
-                        }
-                        string.push('\\');
-                        escaped = false;
-                        continue;
-                    }
-                    return Err(Keyvalues2SerializationError::UnknownToken('\\', self.line_count));
-                }
-                Some('/') => {
-                    if let Some(ref mut string) = string_token {
-                        if escaped {
-                            return Err(Keyvalues2SerializationError::UnknownEscapeCharacter('/', self.line_count));
-                        }
-
-                        string.push('/');
-                        continue;
-                    }
-
-                    if !commented {
-                        commented = true;
-                        continue;
-                    }
-
-                    self.current_line.clear();
-                    let new_line = self.new_line()?;
-                    if new_line.is_none() {
-                        return Ok(None);
-                    }
-                    characters = self.current_line.chars();
-                    commented = false;
-                }
-                Some(char) => {
-                    if let Some(ref mut string) = string_token {
-                        if escaped {
-                            match char {
-                                'n' => string.push('n'),
-                                't' => string.push('t'),
-                                'v' => string.push('v'),
-                                'b' => string.push('b'),
-                                'r' => string.push('r'),
-                                'f' => string.push('f'),
-                                'a' => string.push('a'),
-                                '?' => string.push('?'),
-                                '\'' => string.push('\''),
-                                _ => return Err(Keyvalues2SerializationError::UnknownEscapeCharacter(char, self.line_count)),
-                            }
-                            escaped = false;
-                            continue;
-                        }
-
-                        string.push(char);
-
-                        continue;
                     }
 
                     if commented {
                         return Err(Keyvalues2SerializationError::InvalidCommentDelimiter(self.line_count));
                     }
 
-                    if char.is_whitespace() {
+                    if token.is_none() {
+                        token = Some(StringToken::String(String::new()));
+                        continue;
+                    }
+                }
+                Some('{') => {
+                    if escaped {
+                        return Err(Keyvalues2SerializationError::UnknownEscapeCharacter('{', self.line_count));
+                    }
+
+                    if commented {
+                        return Err(Keyvalues2SerializationError::InvalidCommentDelimiter(self.line_count));
+                    }
+
+                    if token.is_none() {
+                        token = Some(StringToken::OpenBrace);
+                        break;
+                    }
+
+                    if let Some(StringToken::String(ref mut string_token)) = token {
+                        string_token.push('{');
+                    }
+                }
+                Some('}') => {
+                    if escaped {
+                        return Err(Keyvalues2SerializationError::UnknownEscapeCharacter('}', self.line_count));
+                    }
+
+                    if commented {
+                        return Err(Keyvalues2SerializationError::InvalidCommentDelimiter(self.line_count));
+                    }
+
+                    if token.is_none() {
+                        token = Some(StringToken::CloseBrace);
+                        break;
+                    }
+
+                    if let Some(StringToken::String(ref mut string_token)) = token {
+                        string_token.push('}');
+                    }
+                }
+                Some('[') => {
+                    if escaped {
+                        return Err(Keyvalues2SerializationError::UnknownEscapeCharacter('[', self.line_count));
+                    }
+
+                    if commented {
+                        return Err(Keyvalues2SerializationError::InvalidCommentDelimiter(self.line_count));
+                    }
+
+                    if token.is_none() {
+                        token = Some(StringToken::OpenBracket);
+                        break;
+                    }
+
+                    if let Some(StringToken::String(ref mut string_token)) = token {
+                        string_token.push('[');
+                    }
+                }
+                Some(']') => {
+                    if escaped {
+                        return Err(Keyvalues2SerializationError::UnknownEscapeCharacter(']', self.line_count));
+                    }
+
+                    if commented {
+                        return Err(Keyvalues2SerializationError::InvalidCommentDelimiter(self.line_count));
+                    }
+
+                    if token.is_none() {
+                        token = Some(StringToken::CloseBracket);
+                        break;
+                    }
+
+                    if let Some(StringToken::String(ref mut string_token)) = token {
+                        string_token.push(']');
+                    }
+                }
+                Some(',') => {
+                    if escaped {
+                        return Err(Keyvalues2SerializationError::UnknownEscapeCharacter(',', self.line_count));
+                    }
+
+                    if commented {
+                        return Err(Keyvalues2SerializationError::InvalidCommentDelimiter(self.line_count));
+                    }
+
+                    if let Some(StringToken::String(ref mut string_token)) = token {
+                        string_token.push(',');
+                    }
+                }
+                Some('\\') => {
+                    if let Some(StringToken::String(ref mut string_token)) = token {
+                        if !escaped {
+                            escaped = true;
+                            continue;
+                        }
+                        string_token.push('\\');
+                        escaped = false;
                         continue;
                     }
 
-                    return Err(Keyvalues2SerializationError::UnknownToken(char, self.line_count));
+                    return Err(Keyvalues2SerializationError::UnknownToken('\\', self.line_count));
+                }
+                Some('/') => {
+                    if escaped {
+                        return Err(Keyvalues2SerializationError::UnknownEscapeCharacter('/', self.line_count));
+                    }
+
+                    if let Some(StringToken::String(ref mut string_token)) = token {
+                        string_token.push('/');
+                        continue;
+                    }
+
+                    if commented {
+                        let new_line = match self.next_line()? {
+                            Some(line) => line,
+                            None => return Ok(None),
+                        };
+                        self.current_line = new_line;
+                        self.cursor_position = 0;
+                        self.line_count += 1;
+                        line_characters = self.current_line.chars().skip(self.cursor_position);
+                        commented = false;
+                        continue;
+                    }
+
+                    commented = true;
+                }
+                Some(character) => {
+                    if commented {
+                        return Err(Keyvalues2SerializationError::InvalidCommentDelimiter(self.line_count));
+                    }
+
+                    if let Some(StringToken::String(ref mut string_token)) = token {
+                        if escaped {
+                            match character {
+                                'n' => string_token.push('n'),
+                                't' => string_token.push('t'),
+                                'v' => string_token.push('v'),
+                                'b' => string_token.push('b'),
+                                'r' => string_token.push('r'),
+                                'f' => string_token.push('f'),
+                                'a' => string_token.push('a'),
+                                '?' => string_token.push('?'),
+                                '\'' => string_token.push('\''),
+                                _ => return Err(Keyvalues2SerializationError::UnknownEscapeCharacter(character, self.line_count)),
+                            }
+                            escaped = false;
+                            continue;
+                        }
+                        string_token.push(character);
+                        continue;
+                    }
+
+                    if escaped {
+                        return Err(Keyvalues2SerializationError::UnknownEscapeCharacter(character, self.line_count));
+                    }
+
+                    if character.is_whitespace() {
+                        continue;
+                    }
+
+                    return Err(Keyvalues2SerializationError::UnknownToken(character, self.line_count));
                 }
                 None => {
-                    let new_line = self.new_line()?;
-                    if new_line.is_none() {
-                        return Ok(None);
-                    }
-                    characters = self.current_line.chars();
+                    let new_line = match self.next_line()? {
+                        Some(line) => line,
+                        None => return Ok(None),
+                    };
+                    self.current_line = new_line;
+                    self.cursor_position = 0;
+                    self.line_count += 1;
+                    line_characters = self.current_line.chars().skip(self.cursor_position);
                 }
             }
         }
 
-        self.current_line = String::from_iter(characters);
-
         Ok(token)
     }
 
-    fn new_line(&mut self) -> Result<Option<()>, Keyvalues2SerializationError> {
+    fn next_line(&mut self) -> Result<Option<String>, Keyvalues2SerializationError> {
         let mut line = String::new();
-        self.buffer.read_line(&mut line)?;
-        if line.is_empty() {
+        let byte_count = self.buffer.read_line(&mut line)?;
+        if byte_count == 0 {
             return Ok(None);
         }
-        self.current_line = line;
-        self.line_count += 1;
-        Ok(Some(()))
+        Ok(Some(line))
     }
 }
 
