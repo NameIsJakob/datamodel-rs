@@ -1,3 +1,5 @@
+//! Structures for serializing and deserializing.
+
 mod binary;
 pub use binary::BinarySerializationError;
 pub use binary::BinarySerializer;

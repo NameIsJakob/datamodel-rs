@@ -1,3 +1,5 @@
+//! The supported types that data model uses.
+
 use std::time::Duration;
 
 use uuid::Uuid as UUID;
@@ -40,11 +42,13 @@ pub enum Attribute {
     MatrixArray(Vec<Matrix>),
 }
 
+/// Binary data.
 #[derive(Clone, Debug, Default)]
 pub struct BinaryBlock {
     pub data: Vec<u8>,
 }
 
+/// RGBA color values.
 #[derive(Clone, Copy, Debug, Default)]
 pub struct Color {
     pub red: u8,
@@ -53,12 +57,14 @@ pub struct Color {
     pub alpha: u8,
 }
 
+/// A 2 dimensional vector.
 #[derive(Clone, Copy, Debug, Default)]
 pub struct Vector2 {
     pub x: f32,
     pub y: f32,
 }
 
+/// A 3 dimensional vector.
 #[derive(Clone, Copy, Debug, Default)]
 pub struct Vector3 {
     pub x: f32,
@@ -66,6 +72,7 @@ pub struct Vector3 {
     pub z: f32,
 }
 
+/// A 4 dimensional vector.
 #[derive(Clone, Copy, Debug, Default)]
 pub struct Vector4 {
     pub x: f32,
@@ -74,6 +81,7 @@ pub struct Vector4 {
     pub w: f32,
 }
 
+/// Tait–Bryan angles in degrees.
 #[derive(Clone, Copy, Debug, Default)]
 pub struct Angle {
     pub pitch: f32,
@@ -81,6 +89,7 @@ pub struct Angle {
     pub roll: f32,
 }
 
+/// A rotation quaternion.
 #[derive(Clone, Copy, Debug, Default)]
 pub struct Quaternion {
     pub x: f32,
@@ -89,6 +98,7 @@ pub struct Quaternion {
     pub w: f32,
 }
 
+/// A 4 by 4 transformation matrix.
 #[derive(Clone, Copy, Debug, Default)]
 pub struct Matrix {
     pub entries: [[f32; 4]; 4],

@@ -1460,6 +1460,9 @@ fn read_element<T: BufRead>(
     Err(Keyvalues2SerializationError::InvalidAttribute(reader.line_count))
 }
 
+/// Serialize elements to a text format.
+///
+/// KeyValues2 is a extension of KeyValues where its [Key] [Type] [Value].
 pub struct KeyValues2Serializer;
 
 impl Serializer for KeyValues2Serializer {
@@ -1566,6 +1569,9 @@ impl Serializer for KeyValues2Serializer {
     }
 }
 
+/// Serialize elements to a text format.
+///
+/// Like KeyValues2 but elements are not inlined.
 pub struct KeyValues2FlatSerializer;
 
 impl Serializer for KeyValues2FlatSerializer {

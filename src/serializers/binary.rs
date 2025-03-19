@@ -209,6 +209,7 @@ impl<T: BufRead> BinaryReader<T> {
     }
 }
 
+/// Serialize elements to a binary format.
 pub struct BinarySerializer;
 
 impl Serializer for BinarySerializer {

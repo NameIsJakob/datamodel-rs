@@ -13,8 +13,3 @@ attributes to store data.
 -   Binary encoding version 1 - 5 supported
 -   keyvalues2 encoding
 -   keyvalues2_flat encoding
-
-# What is needed?
-
--   legacy xml encoding
--   Documentation
