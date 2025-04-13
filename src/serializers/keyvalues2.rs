@@ -113,23 +113,23 @@ impl<T: Write> StringWriter<T> {
         Ok(())
     }
 
-    fn write_attributes(&mut self, root: &Element, elements: &IndexMap<Element, (UUID, usize)>) -> Result<(), Keyvalues2SerializationError> {
+    fn write_attributes(&mut self, root: &Element, elements: &IndexMap<Element, usize>) -> Result<(), Keyvalues2SerializationError> {
         for (name, attribute) in root.get_attributes().iter() {
             let attribute_type_name = Self::get_attribute_type_name(attribute);
 
             match attribute {
                 Attribute::Element(value) => {
                     if let Some(element) = value {
-                        let (id, count) = elements.get(element).unwrap();
+                        let count = elements.get(element).unwrap();
 
                         if *count > 0 {
-                            self.write_line(&format!("{:?} {:?} \"{}\"", name, attribute_type_name, id))?;
+                            self.write_line(&format!("{:?} {:?} \"{}\"", name, attribute_type_name, element.get_id()))?;
                             continue;
                         }
 
                         self.write_line(&format!("{:?} {:?}", name, element.get_class()))?;
                         self.write_open_brace()?;
-                        self.write_line(&format!("\"id\" \"elementid\" \"{}\"", id))?;
+                        self.write_line(&format!("\"id\" \"elementid\" \"{}\"", element.get_id()))?;
                         self.write_line(&format!("\"name\" \"string\" {:?}", element.get_name()))?;
                         self.write_attributes(element, elements)?;
                         self.write_close_brace()?;
@@ -195,16 +195,16 @@ impl<T: Write> StringWriter<T> {
                     if let Some((last, values)) = values.split_last() {
                         for value in values {
                             if let Some(element) = value {
-                                let (id, count) = elements.get(element).unwrap();
+                                let count = elements.get(element).unwrap();
 
                                 if *count > 0 {
-                                    self.write_line(&format!("\"element\" \"{}\",", id))?;
+                                    self.write_line(&format!("\"element\" \"{}\",", element.get_id()))?;
                                     continue;
                                 }
 
                                 self.write_line(&format!("{:?}", element.get_class()))?;
                                 self.write_open_brace()?;
-                                self.write_line(&format!("\"id\" \"elementid\" \"{}\"", id))?;
+                                self.write_line(&format!("\"id\" \"elementid\" \"{}\"", element.get_id()))?;
                                 self.write_line(&format!("\"name\" \"string\" {:?}", element.get_name()))?;
                                 self.write_attributes(element, elements)?;
                                 self.tab_index -= 1;
@@ -217,14 +217,14 @@ impl<T: Write> StringWriter<T> {
                         }
 
                         if let Some(element) = last {
-                            let (id, count) = elements.get(element).unwrap();
+                            let count = elements.get(element).unwrap();
 
                             if *count > 0 {
-                                self.write_line(&format!("\"element\" \"{}\"", id))?;
+                                self.write_line(&format!("\"element\" \"{}\"", element.get_id()))?;
                             } else {
                                 self.write_line(&format!("{:?}", element.get_class()))?;
                                 self.write_open_brace()?;
-                                self.write_line(&format!("\"id\" \"elementid\" \"{}\"", id))?;
+                                self.write_line(&format!("\"id\" \"elementid\" \"{}\"", element.get_id()))?;
                                 self.write_line(&format!("\"name\" \"string\" {:?}", element.get_name()))?;
                                 self.write_attributes(element, elements)?;
                                 self.write_close_brace()?;
@@ -724,7 +724,7 @@ fn read_attribute<T: BufRead>(
                 match elements.entry(id) {
                     indexmap::map::Entry::Occupied(occupied_entry) => Ok(Attribute::Element(Some(occupied_entry.get().clone()))),
                     indexmap::map::Entry::Vacant(vacant_entry) => {
-                        let element = Element::default();
+                        let element = Element::full(Element::DEFAULT_ELEMENT_NAME, Element::DEFAULT_ELEMENT_CLASS, id);
                         vacant_entry.insert(element.clone());
                         Ok(Attribute::Element(Some(element)))
                     }
@@ -1435,17 +1435,11 @@ fn read_element<T: BufRead>(
                 let mut element = match elements.entry(element_id) {
                     indexmap::map::Entry::Occupied(occupied_entry) => occupied_entry.get().clone(),
                     indexmap::map::Entry::Vacant(vacant_entry) => {
-                        let element = Element::default();
+                        let element = Element::full(element_name.unwrap_or(String::from(Element::DEFAULT_ELEMENT_NAME)), class, element_id);
                         vacant_entry.insert(element.clone());
                         element
                     }
                 };
-
-                if let Some(name) = element_name {
-                    element.set_name(name);
-                }
-
-                element.set_class(class);
 
                 for (name, attribute) in attributes {
                     element.set_attribute(name, attribute);
@@ -1462,7 +1456,7 @@ fn read_element<T: BufRead>(
 
 /// Serialize elements to a text format.
 ///
-/// KeyValues2 is a extension of KeyValues where its [Key] [Type] [Value].
+/// KeyValues2 is a extension of KeyValues where its "Key" "Type" "Value".
 pub struct KeyValues2Serializer;
 
 impl Serializer for KeyValues2Serializer {
@@ -1480,14 +1474,14 @@ impl Serializer for KeyValues2Serializer {
         let mut writer = StringWriter::new(buffer);
         writer.write_raw(&header.create_header(Self::name(), Self::version()))?;
 
-        fn collect_elements(root: Element, elements: &mut IndexMap<Element, (UUID, usize)>) {
-            elements.insert(root.clone(), (UUID::new_v4(), if elements.is_empty() { 1 } else { 0 }));
+        fn collect_elements(root: Element, elements: &mut IndexMap<Element, usize>) {
+            elements.insert(root.clone(), if elements.is_empty() { 1 } else { 0 });
 
             for attribute in root.get_attributes().values() {
                 match attribute {
                     Attribute::Element(value) => match value {
                         Some(element) => {
-                            if let Some((_, count)) = elements.get_mut(element) {
+                            if let Some(count) = elements.get_mut(element) {
                                 *count += 1;
                                 continue;
                             }
@@ -1499,7 +1493,7 @@ impl Serializer for KeyValues2Serializer {
                         for value in values {
                             match value {
                                 Some(element) => {
-                                    if let Some((_, count)) = elements.get_mut(element) {
+                                    if let Some(count) = elements.get_mut(element) {
                                         *count += 1;
                                         continue;
                                     }
@@ -1517,14 +1511,14 @@ impl Serializer for KeyValues2Serializer {
         let mut collected_elements = IndexMap::new();
         collect_elements(root.clone(), &mut collected_elements);
 
-        for (element, (id, use_count)) in &collected_elements {
+        for (element, use_count) in &collected_elements {
             if *use_count == 0 {
                 continue;
             }
 
             writer.write_line(&format!("{:?}", element.get_class()))?;
             writer.write_open_brace()?;
-            writer.write_line(&format!("\"id\" \"elementid\" \"{}\"", id))?;
+            writer.write_line(&format!("\"id\" \"elementid\" \"{}\"", element.get_id()))?;
             writer.write_line(&format!("\"name\" \"string\" \"{}\"", element.get_name()))?;
             writer.write_attributes(element, &collected_elements)?;
             writer.write_close_brace()?;
@@ -1589,8 +1583,8 @@ impl Serializer for KeyValues2FlatSerializer {
         let mut writer = StringWriter::new(buffer);
         writer.write_raw(&header.create_header(Self::name(), Self::version()))?;
 
-        fn collect_elements(root: Element, elements: &mut IndexMap<Element, (UUID, usize)>) {
-            elements.insert(root.clone(), (UUID::new_v4(), 1));
+        fn collect_elements(root: Element, elements: &mut IndexMap<Element, usize>) {
+            elements.insert(root.clone(), 1);
 
             for attribute in root.get_attributes().values() {
                 match attribute {
@@ -1624,10 +1618,10 @@ impl Serializer for KeyValues2FlatSerializer {
         let mut collected_elements = IndexMap::new();
         collect_elements(root.clone(), &mut collected_elements);
 
-        for (element, (id, _)) in &collected_elements {
+        for element in collected_elements.keys() {
             writer.write_line(&format!("{:?}", element.get_class()))?;
             writer.write_open_brace()?;
-            writer.write_line(&format!("\"id\" \"elementid\" \"{}\"", id))?;
+            writer.write_line(&format!("\"id\" \"elementid\" \"{}\"", element.get_id()))?;
             writer.write_line(&format!("\"name\" \"string\" \"{}\"", element.get_name()))?;
             writer.write_attributes(element, &collected_elements)?;
             writer.write_close_brace()?;

@@ -286,7 +286,7 @@ impl Serializer for BinarySerializer {
         for element in &collected_elements {
             writer.write_string_index(&element.get_class())?;
             writer.write_string_index(&element.get_name())?;
-            writer.write_uuid(UUID::new_v4())?;
+            writer.write_uuid(*element.get_id())?;
         }
 
         for element in &collected_elements {
@@ -589,9 +589,9 @@ impl Serializer for BinarySerializer {
         for _ in 0..element_count {
             let element_class = reader.get_string(version)?;
             let element_name = if version >= 4 { reader.get_string(version)? } else { reader.read_string()? };
-            reader.read_uuid()?;
+            let element_id = reader.read_uuid()?;
 
-            elements.push(Element::create(element_name, element_class));
+            elements.push(Element::full(element_name, element_class, element_id));
         }
 
         for element_index in 0..element_count {

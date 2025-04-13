@@ -1,10 +1,10 @@
 use std::{
     cell::{Ref, RefCell},
-    hash::{Hash, Hasher},
     rc::Rc,
 };
 
 use indexmap::IndexMap;
+use uuid::Uuid as UUID;
 
 use crate::Attribute;
 
@@ -14,154 +14,186 @@ use crate::Attribute;
 ///
 /// A element can have multiple references to multiple attributes.
 #[derive(Clone, Debug)]
-pub struct Element {
-    name: Rc<RefCell<String>>,
-    class: Rc<RefCell<String>>,
-    attributes: Rc<RefCell<IndexMap<String, Attribute>>>,
-}
+pub struct Element(Rc<RefCell<ElementData>>);
 
 impl Default for Element {
     fn default() -> Self {
-        Self {
-            name: Rc::new(RefCell::new(String::from("unnamed"))),
-            class: Rc::new(RefCell::new(String::from("DmElement"))),
-            attributes: Rc::new(RefCell::new(IndexMap::new())),
-        }
-    }
-}
-
-impl Eq for Element {}
-
-impl Hash for Element {
-    fn hash<H: Hasher>(&self, state: &mut H) {
-        Rc::as_ptr(&self.name).hash(state);
-        Rc::as_ptr(&self.class).hash(state);
-        Rc::as_ptr(&self.attributes).hash(state);
+        Self(Rc::new(RefCell::new(ElementData {
+            name: String::from(Self::DEFAULT_ELEMENT_NAME),
+            class: String::from(Self::DEFAULT_ELEMENT_CLASS),
+            id: UUID::new_v4(),
+            attributes: IndexMap::new(),
+        })))
     }
 }
 
 impl PartialEq for Element {
     fn eq(&self, other: &Self) -> bool {
-        Rc::ptr_eq(&self.name, &other.name) && Rc::ptr_eq(&self.class, &other.class) && Rc::ptr_eq(&self.attributes, &other.attributes)
+        self.0.borrow().id == other.0.borrow().id
+    }
+}
+
+impl Eq for Element {}
+
+impl std::hash::Hash for Element {
+    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+        self.0.borrow().id.hash(state);
     }
 }
 
 impl Element {
-    /// Creates a new element with a default class with the given name.
-    pub fn named(name: impl Into<String>) -> Self {
-        Self {
-            name: Rc::new(RefCell::new(name.into())),
-            class: Rc::new(RefCell::new(String::from("DmElement"))),
-            attributes: Default::default(),
-        }
-    }
+    pub const DEFAULT_ELEMENT_NAME: &str = "unnamed";
+    pub const DEFAULT_ELEMENT_CLASS: &str = "DmElement";
 
     /// Creates a new element with the given name and class.
     pub fn create(name: impl Into<String>, class: impl Into<String>) -> Self {
-        Self {
-            name: Rc::new(RefCell::new(name.into())),
-            class: Rc::new(RefCell::new(class.into())),
-            attributes: Default::default(),
-        }
+        Self(Rc::new(RefCell::new(ElementData {
+            name: name.into(),
+            class: class.into(),
+            id: UUID::new_v4(),
+            attributes: IndexMap::new(),
+        })))
+    }
+
+    /// Creates a new element with a default class with the given name.
+    pub fn named(name: impl Into<String>) -> Self {
+        Self(Rc::new(RefCell::new(ElementData {
+            name: name.into(),
+            class: String::from(Self::DEFAULT_ELEMENT_CLASS),
+            id: UUID::new_v4(),
+            attributes: IndexMap::new(),
+        })))
     }
 
     /// Creates a new nameless element with the given class.
     pub fn class(class: impl Into<String>) -> Self {
-        Self {
-            name: Rc::new(RefCell::new(String::from("unnamed"))),
-            class: Rc::new(RefCell::new(class.into())),
-            attributes: Default::default(),
-        }
+        Self(Rc::new(RefCell::new(ElementData {
+            name: String::from(Self::DEFAULT_ELEMENT_NAME),
+            class: class.into(),
+            id: UUID::new_v4(),
+            attributes: IndexMap::new(),
+        })))
+    }
+
+    /// Create a element with the name, class, and id specified.
+    pub fn full(name: impl Into<String>, class: impl Into<String>, id: UUID) -> Self {
+        Self(Rc::new(RefCell::new(ElementData {
+            name: name.into(),
+            class: class.into(),
+            id,
+            attributes: IndexMap::new(),
+        })))
     }
 
     /// Returns the name of the element.
-    pub fn get_name(&self) -> Ref<'_, String> {
-        self.name.borrow()
+    pub fn get_name(&self) -> Ref<String> {
+        let element_data = self.0.borrow();
+        Ref::map(element_data, |element| &element.name)
     }
 
     /// Sets the name of the element.
-    pub fn set_name(&mut self, name: impl Into<String>) {
-        *self.name.borrow_mut() = name.into();
+    pub fn set_name(&self, name: impl Into<String>) {
+        let mut element_data = self.0.borrow_mut();
+        element_data.name = name.into();
     }
 
     /// Returns the class of the element.
-    pub fn get_class(&self) -> Ref<'_, String> {
-        self.class.borrow()
+    pub fn get_class(&self) -> Ref<String> {
+        let element_data = self.0.borrow();
+        Ref::map(element_data, |element| &element.class)
     }
 
     /// Sets the class of the element.
-    pub fn set_class(&mut self, class: impl Into<String>) {
-        *self.class.borrow_mut() = class.into();
+    pub fn set_class(&self, class: impl Into<String>) {
+        let mut element_data = self.0.borrow_mut();
+        element_data.class = class.into();
+    }
+
+    /// Returns the [UUID] of the element.
+    pub fn get_id(&self) -> Ref<UUID> {
+        let element_data = self.0.borrow();
+        Ref::map(element_data, |element: &ElementData| &element.id)
     }
 
     /// Returns the attribute with the given name. If the attribute does not exist, returns None.
-    pub fn get_attribute(&self, name: impl AsRef<str>) -> Option<Ref<'_, Attribute>> {
+    pub fn get_attribute(&self, name: impl AsRef<str>) -> Option<Ref<Attribute>> {
+        let element_data = self.0.borrow();
         let attribute_name = name.as_ref();
-
-        match attribute_name {
-            "name" => None,
-            "id" => None,
-            _ => Ref::filter_map(self.attributes.borrow(), |attributes| attributes.get(attribute_name)).ok(),
-        }
-    }
-
-    /// Returns the value of the attribute with the given name. If the attribute does not exist or is not the same type, returns None.
-    pub fn get_value<V>(&self, name: impl AsRef<str>) -> Option<Ref<'_, V>>
-    where
-        for<'a> &'a V: TryFrom<&'a Attribute>,
-    {
-        let attribute_name = name.as_ref();
-
-        match attribute_name {
-            "name" => None,
-            "id" => None,
-            _ => Ref::filter_map(self.attributes.borrow(), |attributes| attributes.get(attribute_name)?.try_into().ok()).ok(),
-        }
+        Ref::filter_map(element_data, |element| element.attributes.get(attribute_name)).ok()
     }
 
     /// Sets the attribute with the given name.
-    pub fn set_attribute(&mut self, name: impl Into<String>, attribute: Attribute) {
+    pub fn set_attribute(&mut self, name: impl Into<String>, attribute: Attribute) -> Option<Attribute> {
+        let mut element_data = self.0.borrow_mut();
         let attribute_name = name.into();
 
-        match attribute_name.as_str() {
-            "name" => return,
-            "id" => return,
-            _ => {}
+        if attribute_name.eq("name") || attribute_name.eq("id") {
+            return None;
         }
 
-        self.attributes.borrow_mut().insert(attribute_name, attribute);
-    }
-
-    /// Sets the value of the attribute with the given name.
-    pub fn set_value(&mut self, name: impl Into<String>, value: impl Into<Attribute>) {
-        self.set_attribute(name, value.into());
+        element_data.attributes.insert(attribute_name, attribute)
     }
 
     /// Removes the attribute with the given name and returns it. If the attribute does not exist, returns None.
     pub fn remove_attribute(&mut self, name: impl AsRef<str>) -> Option<Attribute> {
+        let mut element_data = self.0.borrow_mut();
         let attribute_name = name.as_ref();
+        element_data.attributes.shift_remove(attribute_name)
+    }
 
-        match attribute_name {
-            "name" => None,
-            "id" => None,
-            _ => self.attributes.borrow_mut().shift_remove(attribute_name),
+    /// Returns the value of the attribute with the given name. If the attribute does not exist or is not the same type, returns None.
+    pub fn get_value<V>(&self, name: impl AsRef<str>) -> Option<Ref<V>>
+    where
+        for<'a> &'a V: TryFrom<&'a Attribute>,
+    {
+        let element_data = self.0.borrow();
+        let attribute_name = name.as_ref();
+        let element_attribute = Ref::filter_map(element_data, |element| element.attributes.get(attribute_name)).ok()?;
+        Ref::filter_map(element_attribute, |attribute| attribute.try_into().ok()).ok()
+    }
+
+    /// Sets the value of the attribute with the given name. If there was a value with the same type then its returned.
+    pub fn set_value<V>(&mut self, name: impl Into<String>, value: V) -> Option<V>
+    where
+        V: Into<Attribute> + TryFrom<Attribute>,
+    {
+        let mut element_data = self.0.borrow_mut();
+        let attribute_name = name.into();
+        let attribute_value = value.into();
+
+        if attribute_name.eq("name") || attribute_name.eq("id") {
+            return None;
         }
+
+        element_data
+            .attributes
+            .insert(attribute_name, attribute_value)
+            .and_then(|attribute| attribute.try_into().ok())
     }
 
     /// Removes the value of the attribute with the given name and returns it. If the attribute does not exist or is not the same type, returns None.
     pub fn remove_value<V: TryFrom<Attribute>>(&mut self, name: impl AsRef<str>) -> Option<V> {
         let attribute = self.remove_attribute(name)?;
-
         V::try_from(attribute).ok()
     }
 
     /// Returns the attributes of the element.
-    pub fn get_attributes(&self) -> Ref<'_, IndexMap<String, Attribute>> {
-        self.attributes.borrow()
+    pub fn get_attributes(&self) -> Ref<IndexMap<String, Attribute>> {
+        let element_data = self.0.borrow();
+        Ref::map(element_data, |element| &element.attributes)
     }
 
     /// Reserves capacity for at least additional more elements to be inserted in the given attributes.
     pub fn reserve_attributes(&mut self, additional: usize) {
-        self.attributes.borrow_mut().reserve(additional);
+        let mut element_data = self.0.borrow_mut();
+        element_data.attributes.reserve(additional);
     }
+}
+
+#[derive(Debug)]
+struct ElementData {
+    name: String,
+    class: String,
+    id: UUID,
+    attributes: IndexMap<String, Attribute>,
 }
