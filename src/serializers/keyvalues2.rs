@@ -147,7 +147,7 @@ impl<T: Write> StringWriter<T> {
                     self.write_line(&format!("{:?} \"{}\"", name, attribute_type_name))?;
                     self.write_line("\"")?;
                     self.tab_index += 1;
-                    for chunk in value.data.chunks(40) {
+                    for chunk in value.0.chunks(40) {
                         self.write_string(&format!(
                             "{}\n",
                             chunk.iter().fold(String::with_capacity(chunk.len() * 2), |mut output, byte| {
@@ -159,6 +159,7 @@ impl<T: Write> StringWriter<T> {
                     self.tab_index -= 1;
                     self.write_line("\"")?;
                 }
+                #[allow(deprecated)]
                 Attribute::ObjectId(_) => return Err(Keyvalues2SerializationError::DeprecatedAttribute),
                 Attribute::Time(value) => self.write_line(&format!("{:?} \"{}\" \"{}\"", name, attribute_type_name, value.as_secs_f64()))?,
                 Attribute::Color(value) => self.write_line(&format!(
@@ -183,7 +184,7 @@ impl<T: Write> StringWriter<T> {
                     self.write_line(&format!("{:?} \"{}\"", name, attribute_type_name))?;
                     self.write_line("\"")?;
                     self.tab_index += 1;
-                    for row in &value.entries {
+                    for row in &value.0 {
                         self.write_string(&format!("{} {} {} {}\n", row[0], row[1], row[2], row[3]))?;
                     }
                     self.tab_index -= 1;
@@ -286,7 +287,7 @@ impl<T: Write> StringWriter<T> {
                         for value in values {
                             self.write_line("\"")?;
                             self.tab_index += 1;
-                            for chunk in value.data.chunks(40) {
+                            for chunk in value.0.chunks(40) {
                                 self.write_string(&format!(
                                     "{}\n",
                                     chunk.iter().fold(String::with_capacity(chunk.len() * 2), |mut output, byte| {
@@ -300,7 +301,7 @@ impl<T: Write> StringWriter<T> {
                         }
                         self.write_line("\"")?;
                         self.tab_index += 1;
-                        for chunk in last.data.chunks(40) {
+                        for chunk in last.0.chunks(40) {
                             self.write_string(&format!(
                                 "{}\n",
                                 chunk.iter().fold(String::with_capacity(chunk.len() * 2), |mut output, byte| {
@@ -314,6 +315,7 @@ impl<T: Write> StringWriter<T> {
                     }
                     self.write_close_bracket()?;
                 }
+                #[allow(deprecated)]
                 Attribute::ObjectIdArray(_) => return Err(Keyvalues2SerializationError::DeprecatedAttribute),
                 Attribute::TimeArray(values) => {
                     self.write_line(&format!("{:?} \"{}\"", name, attribute_type_name))?;
@@ -399,7 +401,7 @@ impl<T: Write> StringWriter<T> {
                         for value in values {
                             self.write_line("\"")?;
                             self.tab_index += 1;
-                            for row in &value.entries {
+                            for row in &value.0 {
                                 self.write_string(&format!("{} {} {} {}\n", row[0], row[1], row[2], row[3]))?;
                             }
                             self.tab_index -= 1;
@@ -407,7 +409,7 @@ impl<T: Write> StringWriter<T> {
                         }
                         self.write_line("\"")?;
                         self.tab_index += 1;
-                        for row in last.entries {
+                        for row in last.0 {
                             self.write_string(&format!("{} {} {} {}\n", row[0], row[1], row[2], row[3]))?;
                         }
                         self.tab_index -= 1;
@@ -428,6 +430,7 @@ impl<T: Write> StringWriter<T> {
             Attribute::Boolean(_) => "bool",
             Attribute::String(_) => "string",
             Attribute::Binary(_) => "binary",
+            #[allow(deprecated)]
             Attribute::ObjectId(_) => "elementid",
             Attribute::Time(_) => "time",
             Attribute::Color(_) => "color",
@@ -443,6 +446,7 @@ impl<T: Write> StringWriter<T> {
             Attribute::BooleanArray(_) => "bool_array",
             Attribute::StringArray(_) => "string_array",
             Attribute::BinaryArray(_) => "binary_array",
+            #[allow(deprecated)]
             Attribute::ObjectIdArray(_) => "elementid_array",
             Attribute::TimeArray(_) => "time_array",
             Attribute::ColorArray(_) => "color_array",
@@ -764,7 +768,7 @@ fn read_attribute<T: BufRead>(
                 for byte in value.chars().filter(|c| !c.is_whitespace()).collect::<Vec<char>>().chunks(2) {
                     let byte = byte.iter().collect::<String>();
                     block
-                        .data
+                        .0
                         .push(u8::from_str_radix(&byte, 16).map_err(|_| Keyvalues2SerializationError::FailedToParseInteger(reader.line_count))?);
                 }
 
@@ -774,6 +778,7 @@ fn read_attribute<T: BufRead>(
         },
         "elementid" => match attribute_value {
             StringToken::String(value) => match value.parse() {
+                #[allow(deprecated)]
                 Ok(value) => Ok(Attribute::ObjectId(value)),
                 Err(_) => Err(Keyvalues2SerializationError::FailedToParseUUID(reader.line_count)),
             },
@@ -885,34 +890,32 @@ fn read_attribute<T: BufRead>(
             StringToken::String(value) => {
                 let mut tokens = value.split_whitespace();
 
-                Ok(Attribute::Matrix(Matrix {
-                    entries: [
-                        [
-                            get_float_token(reader, &mut tokens)?,
-                            get_float_token(reader, &mut tokens)?,
-                            get_float_token(reader, &mut tokens)?,
-                            get_float_token(reader, &mut tokens)?,
-                        ],
-                        [
-                            get_float_token(reader, &mut tokens)?,
-                            get_float_token(reader, &mut tokens)?,
-                            get_float_token(reader, &mut tokens)?,
-                            get_float_token(reader, &mut tokens)?,
-                        ],
-                        [
-                            get_float_token(reader, &mut tokens)?,
-                            get_float_token(reader, &mut tokens)?,
-                            get_float_token(reader, &mut tokens)?,
-                            get_float_token(reader, &mut tokens)?,
-                        ],
-                        [
-                            get_float_token(reader, &mut tokens)?,
-                            get_float_token(reader, &mut tokens)?,
-                            get_float_token(reader, &mut tokens)?,
-                            get_float_token(reader, &mut tokens)?,
-                        ],
+                Ok(Attribute::Matrix(Matrix([
+                    [
+                        get_float_token(reader, &mut tokens)?,
+                        get_float_token(reader, &mut tokens)?,
+                        get_float_token(reader, &mut tokens)?,
+                        get_float_token(reader, &mut tokens)?,
                     ],
-                }))
+                    [
+                        get_float_token(reader, &mut tokens)?,
+                        get_float_token(reader, &mut tokens)?,
+                        get_float_token(reader, &mut tokens)?,
+                        get_float_token(reader, &mut tokens)?,
+                    ],
+                    [
+                        get_float_token(reader, &mut tokens)?,
+                        get_float_token(reader, &mut tokens)?,
+                        get_float_token(reader, &mut tokens)?,
+                        get_float_token(reader, &mut tokens)?,
+                    ],
+                    [
+                        get_float_token(reader, &mut tokens)?,
+                        get_float_token(reader, &mut tokens)?,
+                        get_float_token(reader, &mut tokens)?,
+                        get_float_token(reader, &mut tokens)?,
+                    ],
+                ])))
             }
             _ => Err(Keyvalues2SerializationError::InvalidToken(reader.line_count)),
         },
@@ -1054,7 +1057,7 @@ fn read_attribute<T: BufRead>(
 
                                 for byte in value.chars().filter(|c| !c.is_whitespace()).collect::<Vec<char>>().chunks(2) {
                                     let byte = byte.iter().collect::<String>();
-                                    block.data.push(
+                                    block.0.push(
                                         u8::from_str_radix(&byte, 16).map_err(|_| Keyvalues2SerializationError::FailedToParseInteger(reader.line_count))?,
                                     );
                                 }
@@ -1089,6 +1092,7 @@ fn read_attribute<T: BufRead>(
                     }
                 }
 
+                #[allow(deprecated)]
                 Ok(Attribute::ObjectIdArray(values))
             }
             _ => Err(Keyvalues2SerializationError::InvalidToken(reader.line_count)),
@@ -1311,34 +1315,32 @@ fn read_attribute<T: BufRead>(
                             StringToken::String(value) => {
                                 let mut tokens = value.split_whitespace();
 
-                                values.push(Matrix {
-                                    entries: [
-                                        [
-                                            get_float_token(reader, &mut tokens)?,
-                                            get_float_token(reader, &mut tokens)?,
-                                            get_float_token(reader, &mut tokens)?,
-                                            get_float_token(reader, &mut tokens)?,
-                                        ],
-                                        [
-                                            get_float_token(reader, &mut tokens)?,
-                                            get_float_token(reader, &mut tokens)?,
-                                            get_float_token(reader, &mut tokens)?,
-                                            get_float_token(reader, &mut tokens)?,
-                                        ],
-                                        [
-                                            get_float_token(reader, &mut tokens)?,
-                                            get_float_token(reader, &mut tokens)?,
-                                            get_float_token(reader, &mut tokens)?,
-                                            get_float_token(reader, &mut tokens)?,
-                                        ],
-                                        [
-                                            get_float_token(reader, &mut tokens)?,
-                                            get_float_token(reader, &mut tokens)?,
-                                            get_float_token(reader, &mut tokens)?,
-                                            get_float_token(reader, &mut tokens)?,
-                                        ],
+                                values.push(Matrix([
+                                    [
+                                        get_float_token(reader, &mut tokens)?,
+                                        get_float_token(reader, &mut tokens)?,
+                                        get_float_token(reader, &mut tokens)?,
+                                        get_float_token(reader, &mut tokens)?,
                                     ],
-                                });
+                                    [
+                                        get_float_token(reader, &mut tokens)?,
+                                        get_float_token(reader, &mut tokens)?,
+                                        get_float_token(reader, &mut tokens)?,
+                                        get_float_token(reader, &mut tokens)?,
+                                    ],
+                                    [
+                                        get_float_token(reader, &mut tokens)?,
+                                        get_float_token(reader, &mut tokens)?,
+                                        get_float_token(reader, &mut tokens)?,
+                                        get_float_token(reader, &mut tokens)?,
+                                    ],
+                                    [
+                                        get_float_token(reader, &mut tokens)?,
+                                        get_float_token(reader, &mut tokens)?,
+                                        get_float_token(reader, &mut tokens)?,
+                                        get_float_token(reader, &mut tokens)?,
+                                    ],
+                                ]));
                             }
                             _ => return Err(Keyvalues2SerializationError::InvalidToken(reader.line_count)),
                         },

@@ -15,6 +15,7 @@ pub enum Attribute {
     Boolean(bool),
     String(String),
     Binary(BinaryBlock),
+    #[deprecated = "Replaced By Time Value"]
     ObjectId(UUID),
     Time(Duration),
     Color(Color),
@@ -31,6 +32,7 @@ pub enum Attribute {
     BooleanArray(Vec<bool>),
     StringArray(Vec<String>),
     BinaryArray(Vec<BinaryBlock>),
+    #[deprecated = "Replaced By Time Array Value"]
     ObjectIdArray(Vec<UUID>),
     TimeArray(Vec<Duration>),
     ColorArray(Vec<Color>),
@@ -44,9 +46,7 @@ pub enum Attribute {
 
 /// Binary data.
 #[derive(Clone, Debug, Default)]
-pub struct BinaryBlock {
-    pub data: Vec<u8>,
-}
+pub struct BinaryBlock(pub Vec<u8>);
 
 /// RGBA color values.
 #[derive(Clone, Copy, Debug, Default)]
@@ -100,9 +100,7 @@ pub struct Quaternion {
 
 /// A 4 by 4 transformation matrix.
 #[derive(Clone, Copy, Debug, Default)]
-pub struct Matrix {
-    pub entries: [[f32; 4]; 4],
-}
+pub struct Matrix(pub [[f32; 4]; 4]);
 
 /// Implement conversions between [`Attribute`] and it type.
 macro_rules! declare_attribute {
@@ -199,7 +197,55 @@ declare_attribute!(f32, Attribute::Float, Attribute::FloatArray);
 declare_attribute!(bool, Attribute::Boolean, Attribute::BooleanArray);
 declare_attribute!(String, Attribute::String, Attribute::StringArray);
 declare_attribute!(BinaryBlock, Attribute::Binary, Attribute::BinaryArray);
-declare_attribute!(UUID, Attribute::ObjectId, Attribute::ObjectIdArray);
+
+impl TryFrom<Attribute> for UUID {
+    type Error = ();
+
+    fn try_from(value: Attribute) -> Result<Self, Self::Error> {
+        match value {
+            #[allow(deprecated)]
+            Attribute::ObjectId(value) => Ok(value),
+            _ => Err(()),
+        }
+    }
+}
+
+impl<'a> TryFrom<&'a Attribute> for &'a UUID {
+    type Error = ();
+
+    fn try_from(value: &'a Attribute) -> Result<Self, Self::Error> {
+        match value {
+            #[allow(deprecated)]
+            Attribute::ObjectId(value) => Ok(value),
+            _ => Err(()),
+        }
+    }
+}
+
+impl TryFrom<Attribute> for Vec<UUID> {
+    type Error = ();
+
+    fn try_from(value: Attribute) -> Result<Self, Self::Error> {
+        match value {
+            #[allow(deprecated)]
+            Attribute::ObjectIdArray(value) => Ok(value),
+            _ => Err(()),
+        }
+    }
+}
+
+impl<'a> TryFrom<&'a Attribute> for &'a Vec<UUID> {
+    type Error = ();
+
+    fn try_from(value: &'a Attribute) -> Result<Self, Self::Error> {
+        match value {
+            #[allow(deprecated)]
+            Attribute::ObjectIdArray(value) => Ok(value),
+            _ => Err(()),
+        }
+    }
+}
+
 declare_attribute!(Duration, Attribute::Time, Attribute::TimeArray);
 declare_attribute!(Color, Attribute::Color, Attribute::ColorArray);
 declare_attribute!(Vector2, Attribute::Vector2, Attribute::Vector2Array);

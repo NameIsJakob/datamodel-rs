@@ -335,12 +335,13 @@ impl Serializer for BinarySerializer {
                     }
                     Attribute::Binary(value) => {
                         writer.write_byte(6)?;
-                        if value.data.len() > i32::MAX as usize {
+                        if value.0.len() > i32::MAX as usize {
                             return Err(BinarySerializationError::BinaryDataTooLong);
                         }
-                        writer.write_int(value.data.len() as i32)?;
-                        writer.write_bytes(value.data.as_slice())?;
+                        writer.write_int(value.0.len() as i32)?;
+                        writer.write_bytes(value.0.as_slice())?;
                     }
+                    #[allow(deprecated)]
                     Attribute::ObjectId(_) => {
                         return Err(BinarySerializationError::DeprecatedAttribute);
                     }
@@ -388,22 +389,22 @@ impl Serializer for BinarySerializer {
                         writer.write_byte(14)?;
                         writer.write_bytes(
                             [
-                                value.entries[0][0].to_le_bytes(),
-                                value.entries[0][1].to_le_bytes(),
-                                value.entries[0][2].to_le_bytes(),
-                                value.entries[0][3].to_le_bytes(),
-                                value.entries[1][0].to_le_bytes(),
-                                value.entries[1][1].to_le_bytes(),
-                                value.entries[1][2].to_le_bytes(),
-                                value.entries[1][3].to_le_bytes(),
-                                value.entries[2][0].to_le_bytes(),
-                                value.entries[2][1].to_le_bytes(),
-                                value.entries[2][2].to_le_bytes(),
-                                value.entries[2][3].to_le_bytes(),
-                                value.entries[3][0].to_le_bytes(),
-                                value.entries[3][1].to_le_bytes(),
-                                value.entries[3][2].to_le_bytes(),
-                                value.entries[3][3].to_le_bytes(),
+                                value.0[0][0].to_le_bytes(),
+                                value.0[0][1].to_le_bytes(),
+                                value.0[0][2].to_le_bytes(),
+                                value.0[0][3].to_le_bytes(),
+                                value.0[1][0].to_le_bytes(),
+                                value.0[1][1].to_le_bytes(),
+                                value.0[1][2].to_le_bytes(),
+                                value.0[1][3].to_le_bytes(),
+                                value.0[2][0].to_le_bytes(),
+                                value.0[2][1].to_le_bytes(),
+                                value.0[2][2].to_le_bytes(),
+                                value.0[2][3].to_le_bytes(),
+                                value.0[3][0].to_le_bytes(),
+                                value.0[3][1].to_le_bytes(),
+                                value.0[3][2].to_le_bytes(),
+                                value.0[3][3].to_le_bytes(),
                             ]
                             .concat()
                             .as_slice(),
@@ -459,13 +460,14 @@ impl Serializer for BinarySerializer {
                         writer.write_byte(20)?;
                         writer.write_length(value.len())?;
                         for binary in value {
-                            if binary.data.len() > i32::MAX as usize {
+                            if binary.0.len() > i32::MAX as usize {
                                 return Err(BinarySerializationError::BinaryDataTooLong);
                             }
-                            writer.write_int(binary.data.len() as i32)?;
-                            writer.write_bytes(binary.data.as_slice())?;
+                            writer.write_int(binary.0.len() as i32)?;
+                            writer.write_bytes(binary.0.as_slice())?;
                         }
                     }
+                    #[allow(deprecated)]
                     Attribute::ObjectIdArray(_) => {
                         return Err(BinarySerializationError::DeprecatedAttribute);
                     }
@@ -541,22 +543,22 @@ impl Serializer for BinarySerializer {
                         for matrix in value {
                             writer.write_bytes(
                                 [
-                                    matrix.entries[0][0].to_le_bytes(),
-                                    matrix.entries[0][1].to_le_bytes(),
-                                    matrix.entries[0][2].to_le_bytes(),
-                                    matrix.entries[0][3].to_le_bytes(),
-                                    matrix.entries[1][0].to_le_bytes(),
-                                    matrix.entries[1][1].to_le_bytes(),
-                                    matrix.entries[1][2].to_le_bytes(),
-                                    matrix.entries[1][3].to_le_bytes(),
-                                    matrix.entries[2][0].to_le_bytes(),
-                                    matrix.entries[2][1].to_le_bytes(),
-                                    matrix.entries[2][2].to_le_bytes(),
-                                    matrix.entries[2][3].to_le_bytes(),
-                                    matrix.entries[3][0].to_le_bytes(),
-                                    matrix.entries[3][1].to_le_bytes(),
-                                    matrix.entries[3][2].to_le_bytes(),
-                                    matrix.entries[3][3].to_le_bytes(),
+                                    matrix.0[0][0].to_le_bytes(),
+                                    matrix.0[0][1].to_le_bytes(),
+                                    matrix.0[0][2].to_le_bytes(),
+                                    matrix.0[0][3].to_le_bytes(),
+                                    matrix.0[1][0].to_le_bytes(),
+                                    matrix.0[1][1].to_le_bytes(),
+                                    matrix.0[1][2].to_le_bytes(),
+                                    matrix.0[1][3].to_le_bytes(),
+                                    matrix.0[2][0].to_le_bytes(),
+                                    matrix.0[2][1].to_le_bytes(),
+                                    matrix.0[2][2].to_le_bytes(),
+                                    matrix.0[2][3].to_le_bytes(),
+                                    matrix.0[3][0].to_le_bytes(),
+                                    matrix.0[3][1].to_le_bytes(),
+                                    matrix.0[3][2].to_le_bytes(),
+                                    matrix.0[3][3].to_le_bytes(),
                                 ]
                                 .concat()
                                 .as_slice(),
@@ -623,12 +625,11 @@ impl Serializer for BinarySerializer {
                     }
                     6 => {
                         let attribute_data_size = reader.read()?;
-                        Attribute::Binary(BinaryBlock {
-                            data: reader.read_array(attribute_data_size)?,
-                        })
+                        Attribute::Binary(BinaryBlock(reader.read_array(attribute_data_size)?))
                     }
                     7 => {
                         if version < 3 {
+                            #[allow(deprecated)]
                             Attribute::ObjectId(reader.read_uuid()?)
                         } else {
                             let attribute_data_value = reader.read::<i32>()?;
@@ -682,9 +683,7 @@ impl Serializer for BinarySerializer {
 
                         for _ in 0..attribute_array_count {
                             let attribute_data_size = reader.read()?;
-                            attribute_data.push(BinaryBlock {
-                                data: reader.read_array(attribute_data_size)?,
-                            });
+                            attribute_data.push(BinaryBlock(reader.read_array(attribute_data_size)?));
                         }
 
                         Attribute::BinaryArray(attribute_data)
@@ -696,6 +695,7 @@ impl Serializer for BinarySerializer {
                             for _ in 0..attribute_array_count {
                                 attribute_data.push(reader.read_uuid()?);
                             }
+                            #[allow(deprecated)]
                             Attribute::ObjectIdArray(attribute_data)
                         } else {
                             let attribute_array_count = reader.read()?;
