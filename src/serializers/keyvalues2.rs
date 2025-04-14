@@ -33,6 +33,8 @@ pub enum Keyvalues2SerializationError {
     InvalidToken(usize),
     #[error("Unfinished Attribute In Element")]
     UnfinishedAttribute,
+    #[error("Failed To Parse UInt64 On Line: {0}")]
+    FailedToParseUInt64(usize),
     #[error("Failed To Parse Integer On Line: {0}")]
     FailedToParseInteger(usize),
     #[error("Failed To Parse Float On Line: {0}")]
@@ -139,6 +141,7 @@ impl<T: Write> StringWriter<T> {
 
                     self.write_line(&format!("{:?} \"{}\" \"\"", name, attribute_type_name))?;
                 }
+                Attribute::UInt64(value) => self.write_line(&format!("{:?} \"{}\" \"{}\"", name, attribute_type_name, value))?,
                 Attribute::Integer(value) => self.write_line(&format!("{:?} \"{}\" \"{}\"", name, attribute_type_name, value))?,
                 Attribute::Float(value) => self.write_line(&format!("{:?} \"{}\" \"{}\"", name, attribute_type_name, value))?,
                 Attribute::Boolean(value) => self.write_line(&format!("{:?} \"{}\" \"{}\"", name, attribute_type_name, *value as u8))?,
@@ -237,6 +240,17 @@ impl<T: Write> StringWriter<T> {
                     self.write_close_bracket()?;
                 }
                 Attribute::IntegerArray(values) => {
+                    self.write_line(&format!("{:?} \"{}\"", name, attribute_type_name))?;
+                    self.write_open_bracket()?;
+                    if let Some((last, values)) = values.split_last() {
+                        for value in values {
+                            self.write_line(&format!("\"{}\",", value))?;
+                        }
+                        self.write_line(&format!("\"{}\"", last))?;
+                    }
+                    self.write_close_bracket()?;
+                }
+                Attribute::UInt64Array(values) => {
                     self.write_line(&format!("{:?} \"{}\"", name, attribute_type_name))?;
                     self.write_open_bracket()?;
                     if let Some((last, values)) = values.split_last() {
@@ -425,6 +439,7 @@ impl<T: Write> StringWriter<T> {
     fn get_attribute_type_name(attribute: &Attribute) -> &'static str {
         match attribute {
             Attribute::Element(_) => "element",
+            Attribute::UInt64(_) => "uint64",
             Attribute::Integer(_) => "int",
             Attribute::Float(_) => "float",
             Attribute::Boolean(_) => "bool",
@@ -441,6 +456,7 @@ impl<T: Write> StringWriter<T> {
             Attribute::Quaternion(_) => "quaternion",
             Attribute::Matrix(_) => "matrix",
             Attribute::ElementArray(_) => "element_array",
+            Attribute::UInt64Array(_) => "uint64_array",
             Attribute::IntegerArray(_) => "int_array",
             Attribute::FloatArray(_) => "float_array",
             Attribute::BooleanArray(_) => "bool_array",
@@ -740,6 +756,14 @@ fn read_attribute<T: BufRead>(
             StringToken::String(value) => match value.parse() {
                 Ok(value) => Ok(Attribute::Integer(value)),
                 Err(_) => Err(Keyvalues2SerializationError::FailedToParseInteger(reader.line_count)),
+            },
+            _ => Err(Keyvalues2SerializationError::InvalidToken(reader.line_count)),
+        },
+        "uint64" => match attribute_value {
+            StringToken::String(value) => {
+                let int = u64::from_str_radix(value.as_str().strip_prefix("0x").unwrap(), 16).expect("Failed to parse hex to u64");
+
+                Ok(Attribute::UInt64(int))
             },
             _ => Err(Keyvalues2SerializationError::InvalidToken(reader.line_count)),
         },

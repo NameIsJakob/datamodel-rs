@@ -316,6 +316,9 @@ impl Serializer for BinarySerializer {
 
                         writer.write_int(index as i32)?;
                     }
+                    Attribute::UInt64(value) => {
+                        todo!()
+                    }
                     Attribute::Integer(value) => {
                         writer.write_byte(2)?;
                         writer.write_int(*value)?;
@@ -427,6 +430,9 @@ impl Serializer for BinarySerializer {
 
                             writer.write_int(index as i32)?;
                         }
+                    }
+                    Attribute::UInt64Array(value) => {
+                        todo!()
                     }
                     Attribute::IntegerArray(value) => {
                         writer.write_byte(16)?;
