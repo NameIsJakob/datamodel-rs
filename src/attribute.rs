@@ -102,6 +102,9 @@ pub struct Quaternion {
 #[derive(Clone, Copy, Debug, Default)]
 pub struct Matrix(pub [[f32; 4]; 4]);
 
+/// A type to get an element array from a value.
+pub type ElementArray = Vec<Option<Element>>;
+
 /// Implement conversions between [`Attribute`] and it type.
 macro_rules! declare_attribute {
     ($qualifier:ty, $attribute:path, $array:path) => {
