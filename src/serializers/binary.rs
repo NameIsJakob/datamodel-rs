@@ -10,7 +10,10 @@ use indexmap::IndexSet;
 use thiserror::Error as ThisError;
 use uuid::Uuid as UUID;
 
-use crate::{attribute::BinaryBlock, Attribute, Element, Header, Serializer};
+use crate::{
+    attribute::{Attribute, BinaryBlock},
+    Element, Header, Serializer,
+};
 
 #[derive(Debug, ThisError)]
 pub enum BinarySerializationError {

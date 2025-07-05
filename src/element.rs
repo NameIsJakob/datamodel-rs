@@ -6,7 +6,7 @@ use std::{
 use indexmap::IndexMap;
 use uuid::Uuid as UUID;
 
-use crate::Attribute;
+use crate::attribute::Attribute;
 
 /// The element struct represents a single element in the data model.
 ///

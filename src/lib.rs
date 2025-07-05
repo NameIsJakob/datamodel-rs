@@ -43,7 +43,6 @@
 //! ```
 
 pub mod attribute;
-pub use attribute::Attribute;
 
 mod element;
 pub use element::Element;
