@@ -1,6 +1,5 @@
 use std::{
-    io::{BufRead, Error, Write},
-    str::{FromStr, SplitWhitespace},
+    io::{BufRead, Error as IOError, Write},
     time::Duration,
 };
 
@@ -16,37 +15,55 @@ use crate::{
 #[derive(Debug, ThisError)]
 pub enum Keyvalues2SerializationError {
     #[error("IO Error: {0}")]
-    Io(#[from] Error),
+    Io(#[from] IOError),
     #[error("Can't Serialize Deprecated Attribute")]
     DeprecatedAttribute,
-    #[error("Header Serializer Version Is Different")]
-    InvalidEncodingVersion,
     #[error("Header Serializer Is Different")]
     WrongEncoding,
-    #[error("Found Unknown Token: {0} Line: {1}")]
-    UnknownToken(char, usize),
-    #[error("Found Unknown Escape Character: {0} Line: {1}")]
-    UnknownEscapeCharacter(char, usize),
-    #[error("Invalid Comment Delimiter On Line: {0}")]
-    InvalidCommentDelimiter(usize),
-    #[error("Invalid Token On Line: {0}")]
-    InvalidToken(usize),
-    #[error("Unfinished Attribute In Element")]
-    UnfinishedAttribute,
-    #[error("Failed To Parse Integer On Line: {0}")]
-    FailedToParseInteger(usize),
-    #[error("Failed To Parse Float On Line: {0}")]
-    FailedToParseFloat(usize),
-    #[error("Failed To Parse UUID On Line: {0}")]
-    FailedToParseUUID(usize),
-    #[error("Wrong Attribute Type On Line: {0}")]
-    AttributeType(usize),
-    #[error("Duplicate Element Id: {0}")]
+    #[error("Header Serializer Version Is Different")]
+    InvalidEncodingVersion,
+    #[error("Unknown Token \"{0}\" At {1},{2}")]
+    UnknownToken(char, usize, usize),
+    #[error("Unknown Escape Character \"{0}\" At {1},{2}")]
+    UnknownEscapeCharacter(char, usize, usize),
+    #[error("Unfinished Escape Character At {0},{1}")]
+    UnfinishedEscapeCharacter(usize, usize),
+    #[error("Unfinished Quote String At {0},{1}")]
+    UnfinishedQuoteString(usize, usize),
+    #[error("Expected Open Brace At {0},{1}")]
+    ExpectedOpenBrace(usize, usize),
+    #[error("Unexpected Open Brace At {0},{1}")]
+    UnexpectedOpenBrace(usize, usize),
+    #[error("Unexpected Close Brace At {0},{1}")]
+    UnexpectedCloseBrace(usize, usize),
+    #[error("Expected Open Bracket At {0},{1}")]
+    ExpectedOpenBracket(usize, usize),
+    #[error("Unexpected Open Bracket At {0},{1}")]
+    UnexpectedOpenBracket(usize, usize),
+    #[error("Unexpected Close Bracket At {0},{1}")]
+    UnexpectedCloseBracket(usize, usize),
+    #[error("Unexpected End Of File")]
+    UnexpectedEndOfFile,
+    #[error("Failed To Parse Integer At {0},{1}")]
+    ParseIntegerError(usize, usize),
+    #[error("Failed To Parse Float At {0},{1}")]
+    ParseFloatError(usize, usize),
+    #[error("Failed To Parse Boolean At {0},{1}")]
+    ParseBooleanError(usize, usize),
+    #[error("Failed To Parse UUID At {0},{1}")]
+    ParseUUIDError(usize, usize),
+    #[error("Invalid Id Attribute Type At {0},{1}")]
+    InvalidIdAttributeType(usize, usize),
+    #[error("Invalid Name Attribute Type At {0},{1}")]
+    InvalidNameAttributeType(usize, usize),
+    #[error("Element Generated With Existing Id")]
+    DuplicateGeneratedElementId,
+    #[error("Element Id \"{0}\" Already Exists")]
     DuplicateElementId(UUID),
-    #[error("Unknown Attribute Type On Line: {0}")]
-    UnknownAttribute(usize),
-    #[error("Invalid Attribute On Line: {0}")]
-    InvalidAttribute(usize),
+    #[error("Invalid Attribute Value At {0},{1}")]
+    InvalidAttributeValue(usize, usize),
+    #[error("No Elements In File")]
+    NoElements,
 }
 
 struct StringWriter<T: Write> {
@@ -59,6 +76,11 @@ impl<T: Write> StringWriter<T> {
         Self { buffer, tab_index: 0 }
     }
 
+    fn write_header(&mut self, line: &str) -> Result<(), Keyvalues2SerializationError> {
+        self.buffer.write_all(line.as_bytes())?;
+        Ok(())
+    }
+
     fn write_tabs(&mut self) -> Result<(), Keyvalues2SerializationError> {
         if self.tab_index == 0 {
             return Ok(());
@@ -67,27 +89,16 @@ impl<T: Write> StringWriter<T> {
         Ok(())
     }
 
-    fn write_raw(&mut self, string: &str) -> Result<(), Keyvalues2SerializationError> {
-        self.buffer.write_all(string.as_bytes())?;
-        Ok(())
-    }
-
-    fn write_string(&mut self, string: &str) -> Result<(), Keyvalues2SerializationError> {
+    fn write_line(&mut self, line: &str) -> Result<(), Keyvalues2SerializationError> {
         self.write_tabs()?;
-        self.buffer.write_all(string.as_bytes())?;
-        Ok(())
-    }
-
-    fn write_line(&mut self, string: &str) -> Result<(), Keyvalues2SerializationError> {
-        self.write_tabs()?;
-        self.buffer.write_all(string.as_bytes())?;
-        self.buffer.write_all(b"\n")?;
+        self.buffer.write_all(line.as_bytes())?;
+        self.buffer.write_all(b"\r\n")?;
         Ok(())
     }
 
     fn write_open_brace(&mut self) -> Result<(), Keyvalues2SerializationError> {
         self.write_tabs()?;
-        self.buffer.write_all(b"{\n")?;
+        self.buffer.write_all(b"{\r\n")?;
         self.tab_index += 1;
         Ok(())
     }
@@ -95,13 +106,13 @@ impl<T: Write> StringWriter<T> {
     fn write_close_brace(&mut self) -> Result<(), Keyvalues2SerializationError> {
         self.tab_index -= 1;
         self.write_tabs()?;
-        self.buffer.write_all(b"}\n")?;
+        self.buffer.write_all(b"}\r\n")?;
         Ok(())
     }
 
     fn write_open_bracket(&mut self) -> Result<(), Keyvalues2SerializationError> {
         self.write_tabs()?;
-        self.buffer.write_all(b"[\n")?;
+        self.buffer.write_all(b"[\r\n")?;
         self.tab_index += 1;
         Ok(())
     }
@@ -109,125 +120,144 @@ impl<T: Write> StringWriter<T> {
     fn write_close_bracket(&mut self) -> Result<(), Keyvalues2SerializationError> {
         self.tab_index -= 1;
         self.write_tabs()?;
-        self.buffer.write_all(b"]\n")?;
+        self.buffer.write_all(b"]\r\n")?;
         Ok(())
     }
 
-    fn write_attributes(&mut self, root: &Element, elements: &IndexMap<Element, usize>) -> Result<(), Keyvalues2SerializationError> {
+    fn write_attributes(&mut self, root: &Element, collected_elements: &IndexMap<Element, usize>) -> Result<(), Keyvalues2SerializationError> {
+        macro_rules! write_attribute_string {
+            ($self:ident, $attribute_name:expr, $attribute_type:expr, $attribute_value:expr) => {
+                self.write_line(&format!(
+                    "\"{}\" \"{}\" \"{}\"",
+                    self.format_escape_characters($attribute_name),
+                    $attribute_type,
+                    $attribute_value
+                ))
+            };
+
+            ($self:ident, $attribute_name:expr, $attribute_type:expr) => {
+                self.write_line(&format!("\"{}\" \"{}\"", self.format_escape_characters($attribute_name), $attribute_type))
+            };
+        }
+
         for (name, attribute) in root.get_attributes().iter() {
             let attribute_type_name = Self::get_attribute_type_name(attribute);
 
             match attribute {
-                Attribute::Element(value) => {
-                    if let Some(element) = value {
-                        let count = elements.get(element).unwrap();
+                Attribute::Element(element) => {
+                    if let Some(element) = element {
+                        let &count = collected_elements.get(element).unwrap();
 
-                        if *count > 0 {
-                            self.write_line(&format!("{:?} {:?} \"{}\"", name, attribute_type_name, element.get_id()))?;
+                        if count > 0 {
+                            write_attribute_string!(self, name, attribute_type_name, element.get_id())?;
                             continue;
                         }
 
-                        self.write_line(&format!("{:?} {:?}", name, element.get_class()))?;
+                        write_attribute_string!(self, name, self.format_escape_characters(&element.get_class()))?;
                         self.write_open_brace()?;
-                        self.write_line(&format!("\"id\" \"elementid\" \"{}\"", element.get_id()))?;
-                        self.write_line(&format!("\"name\" \"string\" {:?}", element.get_name()))?;
-                        self.write_attributes(element, elements)?;
+                        write_attribute_string!(self, "id", "elementid", element.get_id())?;
+                        write_attribute_string!(self, "name", "string", self.format_escape_characters(&element.get_name()))?;
+                        self.write_attributes(element, collected_elements)?;
                         self.write_close_brace()?;
+                        self.write_line("")?;
 
                         continue;
                     }
 
-                    self.write_line(&format!("{:?} \"{}\" \"\"", name, attribute_type_name))?;
+                    write_attribute_string!(self, name, attribute_type_name, "")?;
                 }
-                Attribute::Integer(value) => self.write_line(&format!("{:?} \"{}\" \"{}\"", name, attribute_type_name, value))?,
-                Attribute::Float(value) => self.write_line(&format!("{:?} \"{}\" \"{}\"", name, attribute_type_name, value))?,
-                Attribute::Boolean(value) => self.write_line(&format!("{:?} \"{}\" \"{}\"", name, attribute_type_name, *value as u8))?,
-                Attribute::String(value) => self.write_line(&format!("{:?} \"{}\" {:?}", name, attribute_type_name, value))?,
-                Attribute::Binary(value) => {
-                    self.write_line(&format!("{:?} \"{}\"", name, attribute_type_name))?;
+                Attribute::Integer(integer) => write_attribute_string!(self, name, attribute_type_name, integer)?,
+                Attribute::Float(float) => write_attribute_string!(self, name, attribute_type_name, float)?,
+                Attribute::Boolean(boolean) => write_attribute_string!(self, name, attribute_type_name, *boolean as u8)?,
+                Attribute::String(string) => write_attribute_string!(self, name, attribute_type_name, self.format_escape_characters(string))?,
+                Attribute::Binary(binary) => {
+                    write_attribute_string!(self, name, attribute_type_name)?;
                     self.write_line("\"")?;
                     self.tab_index += 1;
-                    for chunk in value.0.chunks(40) {
-                        self.write_string(&format!(
-                            "{}\n",
-                            chunk.iter().fold(String::with_capacity(chunk.len() * 2), |mut output, byte| {
-                                output.push_str(&format!("{:02X}", byte));
-                                output
-                            })
-                        ))?;
+                    for chunk in binary.0.chunks(40) {
+                        self.write_line(
+                            &chunk
+                                .iter()
+                                .fold(String::with_capacity(chunk.len() * 2), |mut output, byte| {
+                                    output.push_str(&format!("{byte:02X}"));
+                                    output
+                                })
+                                .to_string(),
+                        )?;
                     }
                     self.tab_index -= 1;
                     self.write_line("\"")?;
                 }
-                #[allow(deprecated)]
-                Attribute::ObjectId(_) => return Err(Keyvalues2SerializationError::DeprecatedAttribute),
-                Attribute::Time(value) => self.write_line(&format!("{:?} \"{}\" \"{}\"", name, attribute_type_name, value.as_secs_f64()))?,
-                Attribute::Color(value) => self.write_line(&format!(
-                    "\"{}\" \"{}\" \"{} {} {} {}\"",
-                    name, attribute_type_name, value.red, value.green, value.blue, value.alpha
-                ))?,
-                Attribute::Vector2(value) => self.write_line(&format!("{:?} \"{}\" \"{} {}\"", name, attribute_type_name, value.x, value.y))?,
-                Attribute::Vector3(value) => self.write_line(&format!("{:?} \"{}\" \"{} {} {}\"", name, attribute_type_name, value.x, value.y, value.z))?,
-                Attribute::Vector4(value) => self.write_line(&format!(
-                    "\"{}\" \"{}\" \"{} {} {} {}\"",
-                    name, attribute_type_name, value.x, value.y, value.z, value.w
-                ))?,
-                Attribute::Angle(value) => self.write_line(&format!(
-                    "\"{}\" \"{}\" \"{} {} {}\"",
-                    name, attribute_type_name, value.roll, value.pitch, value.yaw
-                ))?,
-                Attribute::Quaternion(value) => self.write_line(&format!(
-                    "\"{}\" \"{}\" \"{} {} {} {}\"",
-                    name, attribute_type_name, value.x, value.y, value.z, value.w
-                ))?,
-                Attribute::Matrix(value) => {
-                    self.write_line(&format!("{:?} \"{}\"", name, attribute_type_name))?;
+                Attribute::Time(time) => write_attribute_string!(self, name, attribute_type_name, time.as_secs_f64())?,
+                Attribute::Color(color) => write_attribute_string!(
+                    self,
+                    name,
+                    attribute_type_name,
+                    format!("{} {} {} {}", color.red, color.green, color.blue, color.alpha)
+                )?,
+                Attribute::Vector2(vector2) => write_attribute_string!(self, name, attribute_type_name, format!("{} {}", vector2.x, vector2.y))?,
+                Attribute::Vector3(vector3) => write_attribute_string!(self, name, attribute_type_name, format!("{} {} {}", vector3.x, vector3.y, vector3.z))?,
+                Attribute::Vector4(vector4) => write_attribute_string!(
+                    self,
+                    name,
+                    attribute_type_name,
+                    format!("{} {} {} {}", vector4.x, vector4.y, vector4.z, vector4.w)
+                )?,
+                Attribute::Angle(angle) => write_attribute_string!(self, name, attribute_type_name, format!("{} {} {}", angle.roll, angle.pitch, angle.yaw))?,
+                Attribute::Quaternion(quaternion) => write_attribute_string!(
+                    self,
+                    name,
+                    attribute_type_name,
+                    format!("{} {} {} {}", quaternion.x, quaternion.y, quaternion.z, quaternion.w)
+                )?,
+                Attribute::Matrix(matrix) => {
+                    write_attribute_string!(self, name, attribute_type_name)?;
                     self.write_line("\"")?;
                     self.tab_index += 1;
-                    for row in &value.0 {
-                        self.write_string(&format!("{} {} {} {}\n", row[0], row[1], row[2], row[3]))?;
+                    for row in &matrix.0 {
+                        self.write_line(&format!("{} {} {} {}", row[0], row[1], row[2], row[3]))?;
                     }
                     self.tab_index -= 1;
                     self.write_line("\"")?;
                 }
-                Attribute::ElementArray(values) => {
-                    self.write_line(&format!("{:?} \"{}\"", name, attribute_type_name))?;
+                Attribute::ElementArray(elements) => {
+                    write_attribute_string!(self, name, attribute_type_name)?;
                     self.write_open_bracket()?;
-                    if let Some((last, values)) = values.split_last() {
-                        for value in values {
-                            if let Some(element) = value {
-                                let count = elements.get(element).unwrap();
+                    if let Some((last_element, elements)) = elements.split_last() {
+                        for element in elements {
+                            if let Some(element) = element {
+                                let &count = collected_elements.get(element).unwrap();
 
-                                if *count > 0 {
+                                if count > 0 {
                                     self.write_line(&format!("\"element\" \"{}\",", element.get_id()))?;
                                     continue;
                                 }
 
-                                self.write_line(&format!("{:?}", element.get_class()))?;
+                                self.write_line(&format!("\"{}\"", self.format_escape_characters(&element.get_class())))?;
                                 self.write_open_brace()?;
-                                self.write_line(&format!("\"id\" \"elementid\" \"{}\"", element.get_id()))?;
-                                self.write_line(&format!("\"name\" \"string\" {:?}", element.get_name()))?;
-                                self.write_attributes(element, elements)?;
+                                write_attribute_string!(self, "id", "elementid", element.get_id())?;
+                                write_attribute_string!(self, "name", "string", self.format_escape_characters(&element.get_name()))?;
+                                self.write_attributes(element, collected_elements)?;
                                 self.tab_index -= 1;
                                 self.write_line("},")?;
 
                                 continue;
-                            };
+                            }
 
                             self.write_line("\"element\" \"\",")?;
                         }
 
-                        if let Some(element) = last {
-                            let count = elements.get(element).unwrap();
+                        if let Some(element) = last_element {
+                            let &count = collected_elements.get(element).unwrap();
 
-                            if *count > 0 {
+                            if count > 0 {
                                 self.write_line(&format!("\"element\" \"{}\"", element.get_id()))?;
                             } else {
-                                self.write_line(&format!("{:?}", element.get_class()))?;
+                                self.write_line(&format!("\"{}\"", self.format_escape_characters(&element.get_class())))?;
                                 self.write_open_brace()?;
-                                self.write_line(&format!("\"id\" \"elementid\" \"{}\"", element.get_id()))?;
-                                self.write_line(&format!("\"name\" \"string\" {:?}", element.get_name()))?;
-                                self.write_attributes(element, elements)?;
+                                write_attribute_string!(self, "id", "elementid", element.get_id())?;
+                                write_attribute_string!(self, "name", "string", self.format_escape_characters(&element.get_name()))?;
+                                self.write_attributes(element, collected_elements)?;
                                 self.write_close_brace()?;
                             }
                         } else {
@@ -236,187 +266,193 @@ impl<T: Write> StringWriter<T> {
                     }
                     self.write_close_bracket()?;
                 }
-                Attribute::IntegerArray(values) => {
-                    self.write_line(&format!("{:?} \"{}\"", name, attribute_type_name))?;
+                Attribute::IntegerArray(integers) => {
+                    write_attribute_string!(self, name, attribute_type_name)?;
                     self.write_open_bracket()?;
-                    if let Some((last, values)) = values.split_last() {
-                        for value in values {
-                            self.write_line(&format!("\"{}\",", value))?;
+                    if let Some((last_integer, integers)) = integers.split_last() {
+                        for integer in integers {
+                            self.write_line(&format!("\"{integer}\","))?;
                         }
-                        self.write_line(&format!("\"{}\"", last))?;
+                        self.write_line(&format!("\"{last_integer}\""))?;
                     }
                     self.write_close_bracket()?;
                 }
-                Attribute::FloatArray(values) => {
-                    self.write_line(&format!("{:?} \"{}\"", name, attribute_type_name))?;
+                Attribute::FloatArray(floats) => {
+                    write_attribute_string!(self, name, attribute_type_name)?;
                     self.write_open_bracket()?;
-                    if let Some((last, values)) = values.split_last() {
-                        for value in values {
-                            self.write_line(&format!("\"{}\",", value))?;
+                    if let Some((last_float, floats)) = floats.split_last() {
+                        for float in floats {
+                            self.write_line(&format!("\"{float}\","))?;
                         }
-                        self.write_line(&format!("\"{}\"", last))?;
+                        self.write_line(&format!("\"{last_float}\""))?;
                     }
                     self.write_close_bracket()?;
                 }
-                Attribute::BooleanArray(values) => {
-                    self.write_line(&format!("{:?} \"{}\"", name, attribute_type_name))?;
+                Attribute::BooleanArray(booleans) => {
+                    write_attribute_string!(self, name, attribute_type_name)?;
                     self.write_open_bracket()?;
-                    if let Some((last, values)) = values.split_last() {
-                        for value in values {
-                            self.write_line(&format!("\"{}\",", *value as u8))?;
+                    if let Some((last_boolean, booleans)) = booleans.split_last() {
+                        for boolean in booleans {
+                            self.write_line(&format!("\"{}\",", *boolean as u8))?;
                         }
-                        self.write_line(&format!("\"{}\"", *last as u8))?;
+                        self.write_line(&format!("\"{}\"", *last_boolean as u8))?;
                     }
                     self.write_close_bracket()?;
                 }
-                Attribute::StringArray(values) => {
-                    self.write_line(&format!("{:?} \"{}\"", name, attribute_type_name))?;
+                Attribute::StringArray(strings) => {
+                    write_attribute_string!(self, name, attribute_type_name)?;
                     self.write_open_bracket()?;
-                    if let Some((last, values)) = values.split_last() {
-                        for value in values {
-                            self.write_line(&format!("{:?},", value))?;
+                    if let Some((last_string, strings)) = strings.split_last() {
+                        for string in strings {
+                            self.write_line(&format!("\"{}\",", self.format_escape_characters(string)))?;
                         }
-                        self.write_line(&format!("{:?}", last))?;
+                        self.write_line(&format!("\"{}\"", self.format_escape_characters(last_string)))?;
                     }
                     self.write_close_bracket()?;
                 }
-                Attribute::BinaryArray(values) => {
-                    self.write_line(&format!("{:?} \"{}\"", name, attribute_type_name))?;
+                Attribute::BinaryArray(binaries) => {
+                    write_attribute_string!(self, name, attribute_type_name)?;
                     self.write_open_bracket()?;
-                    if let Some((last, values)) = values.split_last() {
-                        for value in values {
+                    if let Some((last_binary, binaries)) = binaries.split_last() {
+                        for binary in binaries {
                             self.write_line("\"")?;
                             self.tab_index += 1;
-                            for chunk in value.0.chunks(40) {
-                                self.write_string(&format!(
-                                    "{}\n",
-                                    chunk.iter().fold(String::with_capacity(chunk.len() * 2), |mut output, byte| {
-                                        output.push_str(&format!("{:02X}", byte));
+                            for chunk in binary.0.chunks(40) {
+                                self.write_line(
+                                    &chunk
+                                        .iter()
+                                        .fold(String::with_capacity(chunk.len() * 2), |mut output, byte| {
+                                            output.push_str(&format!("{byte:02X}"));
+                                            output
+                                        })
+                                        .to_string(),
+                                )?;
+                            }
+                            self.tab_index -= 1;
+                            self.write_line("\",")?;
+                        }
+                        self.write_line("\"")?;
+                        self.tab_index += 1;
+                        for chunk in last_binary.0.chunks(40) {
+                            self.write_line(
+                                &chunk
+                                    .iter()
+                                    .fold(String::with_capacity(chunk.len() * 2), |mut output, byte| {
+                                        output.push_str(&format!("{byte:02X}"));
                                         output
                                     })
-                                ))?;
-                            }
-                            self.tab_index -= 1;
-                            self.write_line("\",")?;
-                        }
-                        self.write_line("\"")?;
-                        self.tab_index += 1;
-                        for chunk in last.0.chunks(40) {
-                            self.write_string(&format!(
-                                "{}\n",
-                                chunk.iter().fold(String::with_capacity(chunk.len() * 2), |mut output, byte| {
-                                    output.push_str(&format!("{:02X}", byte));
-                                    output
-                                })
-                            ))?;
+                                    .to_string(),
+                            )?;
                         }
                         self.tab_index -= 1;
                         self.write_line("\"")?;
                     }
                     self.write_close_bracket()?;
                 }
-                #[allow(deprecated)]
-                Attribute::ObjectIdArray(_) => return Err(Keyvalues2SerializationError::DeprecatedAttribute),
-                Attribute::TimeArray(values) => {
-                    self.write_line(&format!("{:?} \"{}\"", name, attribute_type_name))?;
+                Attribute::TimeArray(times) => {
+                    write_attribute_string!(self, name, attribute_type_name)?;
                     self.write_open_bracket()?;
-                    if let Some((last, values)) = values.split_last() {
-                        for value in values {
-                            self.write_line(&format!("\"{}\",", value.as_secs_f64()))?;
+                    if let Some((last_time, times)) = times.split_last() {
+                        for time in times {
+                            self.write_line(&format!("\"{}\",", time.as_secs_f64()))?;
                         }
-                        self.write_line(&format!("\"{}\"", last.as_secs_f64()))?;
+                        self.write_line(&format!("\"{}\"", last_time.as_secs_f64()))?;
                     }
                     self.write_close_bracket()?;
                 }
-                Attribute::ColorArray(values) => {
-                    self.write_line(&format!("{:?} \"{}\"", name, attribute_type_name))?;
+                Attribute::ColorArray(colors) => {
+                    write_attribute_string!(self, name, attribute_type_name)?;
                     self.write_open_bracket()?;
-                    if let Some((last, values)) = values.split_last() {
-                        for value in values {
-                            self.write_line(&format!("\"{} {} {} {}\",", value.red, value.green, value.blue, value.alpha))?;
+                    if let Some((last_color, colors)) = colors.split_last() {
+                        for color in colors {
+                            self.write_line(&format!("\"{} {} {} {}\",", color.red, color.green, color.blue, color.alpha))?;
                         }
-                        self.write_line(&format!("\"{} {} {} {}\"", last.red, last.green, last.blue, last.alpha))?;
+                        self.write_line(&format!("\"{} {} {} {}\"", last_color.red, last_color.green, last_color.blue, last_color.alpha))?;
                     }
                     self.write_close_bracket()?;
                 }
-                Attribute::Vector2Array(values) => {
-                    self.write_line(&format!("{:?} \"{}\"", name, attribute_type_name))?;
+                Attribute::Vector2Array(vector2s) => {
+                    write_attribute_string!(self, name, attribute_type_name)?;
                     self.write_open_bracket()?;
-                    if let Some((last, values)) = values.split_last() {
-                        for value in values {
-                            self.write_line(&format!("\"{} {}\",", value.x, value.y))?;
+                    if let Some((last_vector2, vector2s)) = vector2s.split_last() {
+                        for vector2 in vector2s {
+                            self.write_line(&format!("\"{} {}\",", vector2.x, vector2.y))?;
                         }
-                        self.write_line(&format!("\"{} {}\"", last.x, last.y))?;
+                        self.write_line(&format!("\"{} {}\"", last_vector2.x, last_vector2.y))?;
                     }
                     self.write_close_bracket()?;
                 }
-                Attribute::Vector3Array(values) => {
-                    self.write_line(&format!("{:?} \"{}\"", name, attribute_type_name))?;
+                Attribute::Vector3Array(vector3s) => {
+                    write_attribute_string!(self, name, attribute_type_name)?;
                     self.write_open_bracket()?;
-                    if let Some((last, values)) = values.split_last() {
-                        for value in values {
-                            self.write_line(&format!("\"{} {} {}\",", value.x, value.y, value.z))?;
+                    if let Some((last_vector3, vector3s)) = vector3s.split_last() {
+                        for vector3 in vector3s {
+                            self.write_line(&format!("\"{} {} {}\",", vector3.x, vector3.y, vector3.z))?;
                         }
-                        self.write_line(&format!("\"{} {} {}\"", last.x, last.y, last.z))?;
+                        self.write_line(&format!("\"{} {} {}\"", last_vector3.x, last_vector3.y, last_vector3.z))?;
                     }
                     self.write_close_bracket()?;
                 }
-                Attribute::Vector4Array(values) => {
-                    self.write_line(&format!("{:?} \"{}\"", name, attribute_type_name))?;
+                Attribute::Vector4Array(vector4s) => {
+                    write_attribute_string!(self, name, attribute_type_name)?;
                     self.write_open_bracket()?;
-                    if let Some((last, values)) = values.split_last() {
-                        for value in values {
-                            self.write_line(&format!("\"{} {} {} {}\",", value.x, value.y, value.z, value.w))?;
+                    if let Some((last_vector4, vector4s)) = vector4s.split_last() {
+                        for vector4 in vector4s {
+                            self.write_line(&format!("\"{} {} {} {}\",", vector4.x, vector4.y, vector4.z, vector4.w))?;
                         }
-                        self.write_line(&format!("\"{} {} {} {}\"", last.x, last.y, last.z, last.w))?;
+                        self.write_line(&format!("\"{} {} {} {}\"", last_vector4.x, last_vector4.y, last_vector4.z, last_vector4.w))?;
                     }
                     self.write_close_bracket()?;
                 }
-                Attribute::AngleArray(values) => {
-                    self.write_line(&format!("{:?} \"{}\"", name, attribute_type_name))?;
+                Attribute::AngleArray(angles) => {
+                    write_attribute_string!(self, name, attribute_type_name)?;
                     self.write_open_bracket()?;
-                    if let Some((last, values)) = values.split_last() {
-                        for value in values {
-                            self.write_line(&format!("\"{} {} {}\",", value.roll, value.pitch, value.yaw))?;
+                    if let Some((last_angle, angles)) = angles.split_last() {
+                        for angle in angles {
+                            self.write_line(&format!("\"{} {} {}\",", angle.roll, angle.pitch, angle.yaw))?;
                         }
-                        self.write_line(&format!("\"{} {} {}\"", last.roll, last.pitch, last.yaw))?;
+                        self.write_line(&format!("\"{} {} {}\"", last_angle.roll, last_angle.pitch, last_angle.yaw))?;
                     }
                     self.write_close_bracket()?;
                 }
-                Attribute::QuaternionArray(values) => {
-                    self.write_line(&format!("{:?} \"{}\"", name, attribute_type_name))?;
+                Attribute::QuaternionArray(quaternions) => {
+                    write_attribute_string!(self, name, attribute_type_name)?;
                     self.write_open_bracket()?;
-                    if let Some((last, values)) = values.split_last() {
-                        for value in values {
-                            self.write_line(&format!("\"{} {} {} {}\",", value.x, value.y, value.z, value.w))?;
+                    if let Some((last_quaternion, quaternions)) = quaternions.split_last() {
+                        for quaternion in quaternions {
+                            self.write_line(&format!("\"{} {} {} {}\",", quaternion.x, quaternion.y, quaternion.z, quaternion.w))?;
                         }
-                        self.write_line(&format!("\"{} {} {} {}\"", last.x, last.y, last.z, last.w))?;
+                        self.write_line(&format!(
+                            "\"{} {} {} {}\"",
+                            last_quaternion.x, last_quaternion.y, last_quaternion.z, last_quaternion.w
+                        ))?;
                     }
                     self.write_close_bracket()?;
                 }
-                Attribute::MatrixArray(values) => {
-                    self.write_line(&format!("{:?} \"{}\"", name, attribute_type_name))?;
+                Attribute::MatrixArray(matrixes) => {
+                    write_attribute_string!(self, name, attribute_type_name)?;
                     self.write_open_bracket()?;
-                    if let Some((last, values)) = values.split_last() {
-                        for value in values {
+                    if let Some((last_matrix, matrixes)) = matrixes.split_last() {
+                        for matrix in matrixes {
                             self.write_line("\"")?;
                             self.tab_index += 1;
-                            for row in &value.0 {
-                                self.write_string(&format!("{} {} {} {}\n", row[0], row[1], row[2], row[3]))?;
+                            for row in &matrix.0 {
+                                self.write_line(&format!("{} {} {} {}", row[0], row[1], row[2], row[3]))?;
                             }
                             self.tab_index -= 1;
                             self.write_line("\",")?;
                         }
                         self.write_line("\"")?;
                         self.tab_index += 1;
-                        for row in last.0 {
-                            self.write_string(&format!("{} {} {} {}\n", row[0], row[1], row[2], row[3]))?;
+                        for row in &last_matrix.0 {
+                            self.write_line(&format!("{} {} {} {}", row[0], row[1], row[2], row[3]))?;
                         }
                         self.tab_index -= 1;
                         self.write_line("\"")?;
                     }
                     self.write_close_bracket()?;
                 }
+                _ => return Err(Keyvalues2SerializationError::DeprecatedAttribute),
             }
         }
         Ok(())
@@ -458,233 +494,226 @@ impl<T: Write> StringWriter<T> {
             Attribute::MatrixArray(_) => "matrix_array",
         }
     }
+
+    fn format_escape_characters(&self, text: &str) -> String {
+        let mut result = String::with_capacity(text.len());
+        let mut chars = text.chars();
+
+        while let Some(character) = chars.next() {
+            match character {
+                '\\' => match chars.next() {
+                    Some('\\') => {
+                        result.push('\\');
+                        result.push('\\');
+                    }
+                    Some('\'') => {
+                        result.push('\\');
+                        result.push('\'');
+                    }
+                    Some('"') => {
+                        result.push('\\');
+                        result.push('"');
+                    }
+                    Some(escape_character) => {
+                        result.push('\\');
+                        result.push('\\');
+                        result.push(escape_character);
+                    }
+                    None => {
+                        result.push('\\');
+                        result.push('\\');
+                    }
+                },
+                '\'' => {
+                    result.push('\\');
+                    result.push('\'');
+                }
+                '"' => {
+                    result.push('\\');
+                    result.push('"');
+                }
+                _ => result.push(character),
+            }
+        }
+
+        result
+    }
 }
 
-struct StringReader<B: BufRead> {
-    buffer: B,
-    line_count: usize,
+struct StringReader<T: BufRead> {
+    buffer: T,
     current_line: String,
-    cursor_position: usize,
+    line: usize,
+    column: usize,
 }
 
-impl<B: BufRead> StringReader<B> {
-    fn new(buffer: B) -> Self {
+impl<T: BufRead> StringReader<T> {
+    fn new(buffer: T) -> Self {
         Self {
             buffer,
-            line_count: 0,
             current_line: String::new(),
-            cursor_position: 0,
+            line: 1,
+            column: 0,
         }
     }
 
-    fn next_token(&mut self) -> Result<Option<StringToken>, Keyvalues2SerializationError> {
-        if self.current_line.len() == self.cursor_position {
-            let new_line = match self.next_line()? {
+    fn next_token(&mut self) -> Result<Option<ReadToken>, Keyvalues2SerializationError> {
+        if self.current_line.len() == self.column {
+            self.current_line = match self.next_line()? {
                 Some(line) => line,
                 None => return Ok(None),
             };
-            self.current_line = new_line;
-            self.cursor_position = 0;
-            self.line_count += 1;
+            self.line += 1;
+            self.column = 0;
         }
 
-        let mut line_characters = self.current_line.chars().skip(self.cursor_position);
+        let mut line_characters = self.current_line[self.column..].chars().peekable();
         let mut token = None;
-
-        let mut escaped = false;
-        let mut commented = false;
 
         loop {
             let current_character = line_characters.next();
-            self.cursor_position += 1;
+            self.column += 1;
+
             match current_character {
-                Some('"') => {
-                    if let Some(StringToken::String(ref mut string_token)) = token {
-                        if escaped {
-                            string_token.push('\"');
-                            escaped = false;
-                            continue;
-                        }
-                        break;
-                    }
-
-                    if commented {
-                        return Err(Keyvalues2SerializationError::InvalidCommentDelimiter(self.line_count));
-                    }
-
-                    if token.is_none() {
-                        token = Some(StringToken::String(String::new()));
-                        continue;
-                    }
-                }
-                Some('{') => {
-                    if escaped {
-                        return Err(Keyvalues2SerializationError::UnknownEscapeCharacter('{', self.line_count));
-                    }
-
-                    if commented {
-                        return Err(Keyvalues2SerializationError::InvalidCommentDelimiter(self.line_count));
-                    }
-
-                    if token.is_none() {
-                        token = Some(StringToken::OpenBrace);
-                        break;
-                    }
-
-                    if let Some(StringToken::String(ref mut string_token)) = token {
-                        string_token.push('{');
-                    }
-                }
-                Some('}') => {
-                    if escaped {
-                        return Err(Keyvalues2SerializationError::UnknownEscapeCharacter('}', self.line_count));
-                    }
-
-                    if commented {
-                        return Err(Keyvalues2SerializationError::InvalidCommentDelimiter(self.line_count));
-                    }
-
-                    if token.is_none() {
-                        token = Some(StringToken::CloseBrace);
-                        break;
-                    }
-
-                    if let Some(StringToken::String(ref mut string_token)) = token {
-                        string_token.push('}');
-                    }
-                }
-                Some('[') => {
-                    if escaped {
-                        return Err(Keyvalues2SerializationError::UnknownEscapeCharacter('[', self.line_count));
-                    }
-
-                    if commented {
-                        return Err(Keyvalues2SerializationError::InvalidCommentDelimiter(self.line_count));
-                    }
-
-                    if token.is_none() {
-                        token = Some(StringToken::OpenBracket);
-                        break;
-                    }
-
-                    if let Some(StringToken::String(ref mut string_token)) = token {
-                        string_token.push('[');
-                    }
-                }
-                Some(']') => {
-                    if escaped {
-                        return Err(Keyvalues2SerializationError::UnknownEscapeCharacter(']', self.line_count));
-                    }
-
-                    if commented {
-                        return Err(Keyvalues2SerializationError::InvalidCommentDelimiter(self.line_count));
-                    }
-
-                    if token.is_none() {
-                        token = Some(StringToken::CloseBracket);
-                        break;
-                    }
-
-                    if let Some(StringToken::String(ref mut string_token)) = token {
-                        string_token.push(']');
-                    }
-                }
-                Some(',') => {
-                    if escaped {
-                        return Err(Keyvalues2SerializationError::UnknownEscapeCharacter(',', self.line_count));
-                    }
-
-                    if commented {
-                        return Err(Keyvalues2SerializationError::InvalidCommentDelimiter(self.line_count));
-                    }
-
-                    if let Some(StringToken::String(ref mut string_token)) = token {
-                        string_token.push(',');
-                    }
-                }
-                Some('\\') => {
-                    if let Some(StringToken::String(ref mut string_token)) = token {
-                        if !escaped {
-                            escaped = true;
-                            continue;
-                        }
-                        string_token.push('\\');
-                        escaped = false;
-                        continue;
-                    }
-
-                    return Err(Keyvalues2SerializationError::UnknownToken('\\', self.line_count));
-                }
                 Some('/') => {
-                    if escaped {
-                        return Err(Keyvalues2SerializationError::UnknownEscapeCharacter('/', self.line_count));
-                    }
-
-                    if let Some(StringToken::String(ref mut string_token)) = token {
+                    if let Some(ReadToken::String(ref mut string_token)) = token {
                         string_token.push('/');
                         continue;
                     }
 
-                    if commented {
-                        let new_line = match self.next_line()? {
+                    if let Some('/') = line_characters.peek() {
+                        self.current_line = match self.next_line()? {
                             Some(line) => line,
                             None => return Ok(None),
                         };
-                        self.current_line = new_line;
-                        self.cursor_position = 0;
-                        self.line_count += 1;
-                        line_characters = self.current_line.chars().skip(self.cursor_position);
-                        commented = false;
+                        self.line += 1;
+                        self.column = 0;
+                        line_characters = self.current_line.chars().peekable();
                         continue;
                     }
 
-                    commented = true;
+                    return Err(Keyvalues2SerializationError::UnknownToken('/', self.line, self.column));
+                }
+                Some('"') => {
+                    if matches!(token, Some(ReadToken::String(_))) {
+                        break;
+                    }
+
+                    token = Some(ReadToken::String(String::with_capacity(32)));
+                }
+                Some('{') => {
+                    if let Some(ReadToken::String(ref mut string_token)) = token {
+                        string_token.push('{');
+                        continue;
+                    }
+
+                    token = Some(ReadToken::OpenBrace);
+                    break;
+                }
+                Some('}') => {
+                    if let Some(ReadToken::String(ref mut string_token)) = token {
+                        string_token.push('}');
+                        continue;
+                    }
+
+                    token = Some(ReadToken::CloseBrace);
+                    break;
+                }
+                Some('[') => {
+                    if let Some(ReadToken::String(ref mut string_token)) = token {
+                        string_token.push('[');
+                        continue;
+                    }
+
+                    token = Some(ReadToken::OpenBracket);
+                    break;
+                }
+                Some(']') => {
+                    if let Some(ReadToken::String(ref mut string_token)) = token {
+                        string_token.push(']');
+                        continue;
+                    }
+
+                    token = Some(ReadToken::CloseBracket);
+                    break;
+                }
+                Some(',') => {
+                    if let Some(ReadToken::String(ref mut string_token)) = token {
+                        string_token.push(',');
+                    }
                 }
                 Some(character) => {
-                    if commented {
-                        return Err(Keyvalues2SerializationError::InvalidCommentDelimiter(self.line_count));
-                    }
-
-                    if let Some(StringToken::String(ref mut string_token)) = token {
-                        if escaped {
-                            match character {
-                                'n' => string_token.push('n'),
-                                't' => string_token.push('t'),
-                                'v' => string_token.push('v'),
-                                'b' => string_token.push('b'),
-                                'r' => string_token.push('r'),
-                                'f' => string_token.push('f'),
-                                'a' => string_token.push('a'),
-                                '?' => string_token.push('?'),
-                                '\'' => string_token.push('\''),
-                                _ => return Err(Keyvalues2SerializationError::UnknownEscapeCharacter(character, self.line_count)),
+                    if let Some(ReadToken::String(ref mut string_token)) = token {
+                        if character == '\\' {
+                            match line_characters.next() {
+                                Some('n') => {
+                                    string_token.push('\n');
+                                }
+                                Some('t') => {
+                                    string_token.push('\t');
+                                }
+                                Some('v') => {
+                                    string_token.push('v');
+                                }
+                                Some('b') => {
+                                    string_token.push('b');
+                                }
+                                Some('r') => {
+                                    string_token.push('\r');
+                                }
+                                Some('f') => {
+                                    string_token.push('f');
+                                }
+                                Some('a') => {
+                                    string_token.push('a');
+                                }
+                                Some('\\') => {
+                                    string_token.push('\\');
+                                }
+                                Some('?') => {
+                                    string_token.push('?');
+                                }
+                                Some('\'') => {
+                                    string_token.push('\'');
+                                }
+                                Some('"') => {
+                                    string_token.push('"');
+                                }
+                                Some(escape_character) => {
+                                    if escape_character.is_whitespace() {
+                                        return Err(Keyvalues2SerializationError::UnfinishedEscapeCharacter(self.line, self.column));
+                                    }
+                                    return Err(Keyvalues2SerializationError::UnknownEscapeCharacter(escape_character, self.line, self.column));
+                                }
+                                None => return Err(Keyvalues2SerializationError::UnfinishedEscapeCharacter(self.line, self.column)),
                             }
-                            escaped = false;
+                            self.column += 1;
                             continue;
                         }
+
                         string_token.push(character);
                         continue;
-                    }
-
-                    if escaped {
-                        return Err(Keyvalues2SerializationError::UnknownEscapeCharacter(character, self.line_count));
                     }
 
                     if character.is_whitespace() {
                         continue;
                     }
 
-                    return Err(Keyvalues2SerializationError::UnknownToken(character, self.line_count));
+                    return Err(Keyvalues2SerializationError::UnknownToken(character, self.line, self.column));
                 }
                 None => {
-                    let new_line = match self.next_line()? {
+                    self.current_line = match self.next_line()? {
                         Some(line) => line,
-                        None => return Ok(None),
+                        None => {
+                            if let Some(ReadToken::String(_)) = token {
+                                return Err(Keyvalues2SerializationError::UnfinishedQuoteString(self.line, self.column));
+                            }
+                            return Ok(None);
+                        }
                     };
-                    self.current_line = new_line;
-                    self.cursor_position = 0;
-                    self.line_count += 1;
-                    line_characters = self.current_line.chars().skip(self.cursor_position);
+                    self.line += 1;
+                    self.column = 0;
+                    line_characters = self.current_line.chars().peekable();
                 }
             }
         }
@@ -700,760 +729,492 @@ impl<B: BufRead> StringReader<B> {
         }
         Ok(Some(line))
     }
+
+    fn read_element(
+        &mut self,
+        collected_elements: &mut IndexMap<UUID, Element>,
+        element_remap: &mut IndexMap<Element, Vec<(String, ElementAttributeRemap)>>,
+    ) -> Result<Option<Element>, Keyvalues2SerializationError> {
+        let element_class = match self.next_token()? {
+            Some(ReadToken::String(string_token)) => string_token,
+            Some(ReadToken::OpenBrace) => return Err(Keyvalues2SerializationError::UnexpectedOpenBrace(self.line, self.column)),
+            Some(ReadToken::CloseBrace) => return Err(Keyvalues2SerializationError::UnexpectedCloseBrace(self.line, self.column)),
+            Some(ReadToken::OpenBracket) => return Err(Keyvalues2SerializationError::UnexpectedOpenBracket(self.line, self.column)),
+            Some(ReadToken::CloseBracket) => return Err(Keyvalues2SerializationError::UnexpectedCloseBracket(self.line, self.column)),
+            None => return Ok(None),
+        };
+
+        let mut element = Element::create(String::new(), element_class);
+        if collected_elements.insert(*element.get_id(), Element::clone(&element)).is_some() {
+            return Err(Keyvalues2SerializationError::DuplicateGeneratedElementId);
+        }
+
+        if !matches!(self.next_token()?, Some(ReadToken::OpenBrace)) {
+            return Err(Keyvalues2SerializationError::ExpectedOpenBrace(self.line, self.column));
+        }
+
+        self.read_attributes(&mut element, collected_elements, element_remap)?;
+
+        Ok(Some(element))
+    }
+
+    fn read_attributes(
+        &mut self,
+        element: &mut Element,
+        collected_elements: &mut IndexMap<UUID, Element>,
+        element_remap: &mut IndexMap<Element, Vec<(String, ElementAttributeRemap)>>,
+    ) -> Result<(), Keyvalues2SerializationError> {
+        loop {
+            let attribute_name = match self.next_token()?.ok_or(Keyvalues2SerializationError::UnexpectedEndOfFile)? {
+                ReadToken::String(string_token) => string_token,
+                ReadToken::OpenBrace => return Err(Keyvalues2SerializationError::UnexpectedOpenBrace(self.line, self.column)),
+                ReadToken::CloseBrace => return Ok(()),
+                ReadToken::OpenBracket => return Err(Keyvalues2SerializationError::UnexpectedOpenBracket(self.line, self.column)),
+                ReadToken::CloseBracket => return Err(Keyvalues2SerializationError::UnexpectedCloseBracket(self.line, self.column)),
+            };
+
+            let attribute_type = match self.next_token()?.ok_or(Keyvalues2SerializationError::UnexpectedEndOfFile)? {
+                ReadToken::String(string_token) => string_token,
+                ReadToken::OpenBrace => return Err(Keyvalues2SerializationError::UnexpectedOpenBrace(self.line, self.column)),
+                ReadToken::CloseBrace => return Err(Keyvalues2SerializationError::UnexpectedCloseBrace(self.line, self.column)),
+                ReadToken::OpenBracket => return Err(Keyvalues2SerializationError::UnexpectedOpenBracket(self.line, self.column)),
+                ReadToken::CloseBracket => return Err(Keyvalues2SerializationError::UnexpectedCloseBracket(self.line, self.column)),
+            };
+
+            if attribute_name == "id" {
+                if attribute_type != "elementid" {
+                    return Err(Keyvalues2SerializationError::InvalidIdAttributeType(
+                        self.line,
+                        self.column.saturating_sub(attribute_type.len().saturating_sub(1)),
+                    ));
+                }
+
+                let attribute_value = match self.next_token()?.ok_or(Keyvalues2SerializationError::UnexpectedEndOfFile)? {
+                    ReadToken::String(string_token) => string_token,
+                    ReadToken::OpenBrace => return Err(Keyvalues2SerializationError::UnexpectedOpenBrace(self.line, self.column)),
+                    ReadToken::CloseBrace => return Err(Keyvalues2SerializationError::UnexpectedCloseBrace(self.line, self.column)),
+                    ReadToken::OpenBracket => return Err(Keyvalues2SerializationError::UnexpectedOpenBracket(self.line, self.column)),
+                    ReadToken::CloseBracket => return Err(Keyvalues2SerializationError::UnexpectedCloseBracket(self.line, self.column)),
+                };
+
+                let element_id = attribute_value.parse::<UUID>().map_err(|_| {
+                    Keyvalues2SerializationError::ParseUUIDError(self.line, self.column.saturating_sub(attribute_value.len().saturating_sub(1)))
+                })?;
+
+                if element_id == *element.get_id() {
+                    continue;
+                }
+
+                if collected_elements.contains_key(&element_id) {
+                    return Err(Keyvalues2SerializationError::DuplicateElementId(element_id));
+                }
+
+                collected_elements.shift_remove(&*element.get_id()).unwrap();
+                element.set_id(element_id);
+                collected_elements.insert(element_id, Element::clone(element));
+                continue;
+            }
+
+            if attribute_name == "name" {
+                if attribute_type != "string" {
+                    return Err(Keyvalues2SerializationError::InvalidNameAttributeType(
+                        self.line,
+                        self.column.saturating_sub(attribute_type.len().saturating_sub(1)),
+                    ));
+                }
+
+                let attribute_value = match self.next_token()?.ok_or(Keyvalues2SerializationError::UnexpectedEndOfFile)? {
+                    ReadToken::String(string_token) => string_token,
+                    ReadToken::OpenBrace => return Err(Keyvalues2SerializationError::UnexpectedOpenBrace(self.line, self.column)),
+                    ReadToken::CloseBrace => return Err(Keyvalues2SerializationError::UnexpectedCloseBrace(self.line, self.column)),
+                    ReadToken::OpenBracket => return Err(Keyvalues2SerializationError::UnexpectedOpenBracket(self.line, self.column)),
+                    ReadToken::CloseBracket => return Err(Keyvalues2SerializationError::UnexpectedCloseBracket(self.line, self.column)),
+                };
+
+                element.set_name(attribute_value);
+                continue;
+            }
+
+            if let Some(attribute) = self.read_attribute_value(&attribute_type)? {
+                element.set_attribute(attribute_name, attribute);
+                continue;
+            }
+
+            if let Some(array_attribute) = self.read_attribute_array(&attribute_type)? {
+                element.set_attribute(attribute_name, array_attribute);
+                continue;
+            }
+
+            if attribute_type == "element" {
+                let attribute_value = match self.next_token()?.ok_or(Keyvalues2SerializationError::UnexpectedEndOfFile)? {
+                    ReadToken::String(string_token) => string_token,
+                    ReadToken::OpenBrace => return Err(Keyvalues2SerializationError::UnexpectedOpenBrace(self.line, self.column)),
+                    ReadToken::CloseBrace => return Err(Keyvalues2SerializationError::UnexpectedCloseBrace(self.line, self.column)),
+                    ReadToken::OpenBracket => return Err(Keyvalues2SerializationError::UnexpectedOpenBracket(self.line, self.column)),
+                    ReadToken::CloseBracket => return Err(Keyvalues2SerializationError::UnexpectedCloseBracket(self.line, self.column)),
+                };
+
+                if attribute_value.is_empty() {
+                    element.set_attribute(attribute_name, Attribute::Element(None));
+                    continue;
+                }
+
+                let element_id = attribute_value.parse::<UUID>().map_err(|_| {
+                    Keyvalues2SerializationError::ParseUUIDError(self.line, self.column.saturating_sub(attribute_value.len().saturating_sub(1)))
+                })?;
+
+                element_remap
+                    .entry(Element::clone(element))
+                    .or_default()
+                    .push((attribute_name.clone(), ElementAttributeRemap::Single(element_id)));
+
+                element.set_attribute(attribute_name, Attribute::Element(None));
+                continue;
+            }
+
+            if attribute_type == "element_array" {
+                if !matches!(self.next_token()?, Some(ReadToken::OpenBracket)) {
+                    return Err(Keyvalues2SerializationError::ExpectedOpenBracket(self.line, self.column));
+                }
+
+                let mut elements = Vec::new();
+                let mut remaps = Vec::new();
+
+                loop {
+                    let attribute_value = match self.next_token()?.ok_or(Keyvalues2SerializationError::UnexpectedEndOfFile)? {
+                        ReadToken::String(string_token) => string_token,
+                        ReadToken::OpenBrace => return Err(Keyvalues2SerializationError::UnexpectedOpenBrace(self.line, self.column)),
+                        ReadToken::CloseBrace => return Err(Keyvalues2SerializationError::UnexpectedCloseBrace(self.line, self.column)),
+                        ReadToken::OpenBracket => return Err(Keyvalues2SerializationError::UnexpectedOpenBracket(self.line, self.column)),
+                        ReadToken::CloseBracket => break,
+                    };
+
+                    match self.next_token()?.ok_or(Keyvalues2SerializationError::UnexpectedEndOfFile)? {
+                        ReadToken::String(string_token) => {
+                            if attribute_value != "element" {
+                                return Err(Keyvalues2SerializationError::ExpectedOpenBrace(
+                                    self.line,
+                                    self.column.saturating_sub(attribute_value.len().saturating_sub(1)),
+                                ));
+                            }
+
+                            if string_token.is_empty() {
+                                elements.push(None);
+                                continue;
+                            }
+
+                            let element_id = string_token.parse::<UUID>().map_err(|_| {
+                                Keyvalues2SerializationError::ParseUUIDError(self.line, self.column.saturating_sub(attribute_value.len().saturating_sub(1)))
+                            })?;
+
+                            remaps.push((elements.len(), element_id));
+                            elements.push(None);
+                        }
+                        ReadToken::OpenBrace => {
+                            elements.push(Some(self.read_element_attribute(attribute_value, collected_elements, element_remap)?));
+                        }
+                        ReadToken::CloseBrace => return Err(Keyvalues2SerializationError::UnexpectedCloseBrace(self.line, self.column)),
+                        ReadToken::OpenBracket => return Err(Keyvalues2SerializationError::UnexpectedOpenBracket(self.line, self.column)),
+                        ReadToken::CloseBracket => return Err(Keyvalues2SerializationError::UnexpectedCloseBracket(self.line, self.column)),
+                    };
+                }
+
+                if !remaps.is_empty() {
+                    element_remap
+                        .entry(Element::clone(element))
+                        .or_default()
+                        .push((attribute_name.clone(), ElementAttributeRemap::Array(remaps)));
+                }
+
+                element.set_attribute(attribute_name, Attribute::ElementArray(elements));
+                continue;
+            }
+
+            if !matches!(self.next_token()?, Some(ReadToken::OpenBrace)) {
+                return Err(Keyvalues2SerializationError::ExpectedOpenBrace(self.line, self.column));
+            }
+
+            element.set_attribute(
+                attribute_name,
+                Attribute::Element(Some(self.read_element_attribute(attribute_type, collected_elements, element_remap)?)),
+            );
+        }
+    }
+
+    fn read_attribute_array(&mut self, attribute_type: &str) -> Result<Option<Attribute>, Keyvalues2SerializationError> {
+        macro_rules! parse_array_attribute {
+            ($self:ident, $match_variant:path, $single_type:expr, $result_variant:path) => {
+                if !matches!($self.next_token()?, Some(ReadToken::OpenBracket)) {
+                    return Err(Keyvalues2SerializationError::ExpectedOpenBracket($self.line, $self.column));
+                } else {
+                    let mut array = Vec::new();
+                    #[allow(deprecated)]
+                    while let Some($match_variant(value)) = self.read_attribute_value($single_type)? {
+                        array.push(value);
+                    }
+                    #[allow(deprecated)]
+                    Some($result_variant(array))
+                }
+            };
+        }
+
+        Ok(match attribute_type {
+            "int_array" => {
+                parse_array_attribute!(self, Attribute::Integer, "int", Attribute::IntegerArray)
+            }
+            "float_array" => {
+                parse_array_attribute!(self, Attribute::Float, "float", Attribute::FloatArray)
+            }
+            "bool_array" => {
+                parse_array_attribute!(self, Attribute::Boolean, "bool", Attribute::BooleanArray)
+            }
+            "string_array" => {
+                parse_array_attribute!(self, Attribute::String, "string", Attribute::StringArray)
+            }
+            "binary_array" => {
+                parse_array_attribute!(self, Attribute::Binary, "binary", Attribute::BinaryArray)
+            }
+            "elementid_array" => {
+                parse_array_attribute!(self, Attribute::ObjectId, "elementid", Attribute::ObjectIdArray)
+            }
+            "time_array" => {
+                parse_array_attribute!(self, Attribute::Time, "time", Attribute::TimeArray)
+            }
+            "color_array" => {
+                parse_array_attribute!(self, Attribute::Color, "color", Attribute::ColorArray)
+            }
+            "vector2_array" => {
+                parse_array_attribute!(self, Attribute::Vector2, "vector2", Attribute::Vector2Array)
+            }
+            "vector3_array" => {
+                parse_array_attribute!(self, Attribute::Vector3, "vector3", Attribute::Vector3Array)
+            }
+            "vector4_array" => {
+                parse_array_attribute!(self, Attribute::Vector4, "vector4", Attribute::Vector4Array)
+            }
+            "qangle_array" => {
+                parse_array_attribute!(self, Attribute::Angle, "qangle", Attribute::AngleArray)
+            }
+            "quaternion_array" => {
+                parse_array_attribute!(self, Attribute::Quaternion, "quaternion", Attribute::QuaternionArray)
+            }
+            "matrix_array" => {
+                parse_array_attribute!(self, Attribute::Matrix, "matrix", Attribute::MatrixArray)
+            }
+            _ => None,
+        })
+    }
+
+    fn read_attribute_value(&mut self, attribute_type: &str) -> Result<Option<Attribute>, Keyvalues2SerializationError> {
+        macro_rules! get_attribute_value {
+            ($self:ident) => {
+                match self.next_token()?.ok_or(Keyvalues2SerializationError::UnexpectedEndOfFile)? {
+                    ReadToken::String(string_token) => string_token,
+                    ReadToken::OpenBrace => return Err(Keyvalues2SerializationError::UnexpectedOpenBrace(self.line, self.column)),
+                    ReadToken::CloseBrace => return Err(Keyvalues2SerializationError::UnexpectedCloseBrace(self.line, self.column)),
+                    ReadToken::OpenBracket => return Err(Keyvalues2SerializationError::UnexpectedOpenBracket(self.line, self.column)),
+                    ReadToken::CloseBracket => return Ok(None),
+                }
+            };
+        }
+
+        macro_rules! parse_primitive {
+            ($self:ident, $attribute_value:expr, $parse_error_variant:path) => {
+                $attribute_value
+                    .parse()
+                    .map_err(|_| $parse_error_variant(self.line, self.column.saturating_sub($attribute_value.len().saturating_sub(1))))?
+            };
+            ($self:ident, $tokens:expr, $attribute_value:expr, $parse_error_variant:path) => {
+                $tokens
+                    .next()
+                    .ok_or(Keyvalues2SerializationError::InvalidAttributeValue(
+                        self.line,
+                        self.column.saturating_sub($attribute_value.len().saturating_sub(1)),
+                    ))?
+                    .parse()
+                    .map_err(|_| $parse_error_variant(self.line, self.column.saturating_sub($attribute_value.len().saturating_sub(1))))?
+            };
+        }
+
+        Ok(match attribute_type {
+            "int" => {
+                let attribute_value = get_attribute_value!(self);
+
+                Some(Attribute::Integer(parse_primitive!(
+                    self,
+                    attribute_value,
+                    Keyvalues2SerializationError::ParseIntegerError
+                )))
+            }
+            "float" => {
+                let attribute_value = get_attribute_value!(self);
+                Some(Attribute::Float(parse_primitive!(
+                    self,
+                    attribute_value,
+                    Keyvalues2SerializationError::ParseFloatError
+                )))
+            }
+            "bool" => {
+                let attribute_value = get_attribute_value!(self);
+                Some(Attribute::Boolean(
+                    attribute_value.parse::<u8>().map_err(|_| {
+                        Keyvalues2SerializationError::ParseBooleanError(self.line, self.column.saturating_sub(attribute_value.len().saturating_sub(1)))
+                    })? != 0,
+                ))
+            }
+            "string" => {
+                let attribute_value = get_attribute_value!(self);
+                Some(Attribute::String(attribute_value))
+            }
+            "binary" => {
+                let attribute_value = get_attribute_value!(self);
+                let mut block = BinaryBlock::default();
+
+                for byte in attribute_value.chars().filter(|c| !c.is_whitespace()).collect::<Vec<char>>().chunks(2) {
+                    let byte = byte.iter().collect::<String>();
+                    block.0.push(u8::from_str_radix(&byte, 16).map_err(|_| {
+                        Keyvalues2SerializationError::ParseIntegerError(self.line, self.column.saturating_sub(attribute_value.len().saturating_sub(1)))
+                    })?);
+                }
+
+                Some(Attribute::Binary(block))
+            }
+            "elementid" => {
+                let attribute_value = get_attribute_value!(self);
+                let object_id = attribute_value.parse::<UUID>().map_err(|_| {
+                    Keyvalues2SerializationError::ParseUUIDError(self.line, self.column.saturating_sub(attribute_value.len().saturating_sub(1)))
+                })?;
+
+                #[allow(deprecated)]
+                Some(Attribute::ObjectId(object_id))
+            }
+            "time" => {
+                let attribute_value = get_attribute_value!(self);
+                Some(Attribute::Time(Duration::from_secs_f32(parse_primitive!(
+                    self,
+                    attribute_value,
+                    Keyvalues2SerializationError::ParseFloatError
+                ))))
+            }
+            "color" => {
+                let attribute_value = get_attribute_value!(self);
+                let mut tokens = attribute_value.split_whitespace();
+                Some(Attribute::Color(Color {
+                    red: parse_primitive!(self, tokens, attribute_value, Keyvalues2SerializationError::ParseIntegerError),
+                    green: parse_primitive!(self, tokens, attribute_value, Keyvalues2SerializationError::ParseIntegerError),
+                    blue: parse_primitive!(self, tokens, attribute_value, Keyvalues2SerializationError::ParseIntegerError),
+                    alpha: parse_primitive!(self, tokens, attribute_value, Keyvalues2SerializationError::ParseIntegerError),
+                }))
+            }
+            "vector2" => {
+                let attribute_value = get_attribute_value!(self);
+                let mut tokens = attribute_value.split_whitespace();
+                Some(Attribute::Vector2(Vector2 {
+                    x: parse_primitive!(self, tokens, attribute_value, Keyvalues2SerializationError::ParseFloatError),
+                    y: parse_primitive!(self, tokens, attribute_value, Keyvalues2SerializationError::ParseFloatError),
+                }))
+            }
+            "vector3" => {
+                let attribute_value = get_attribute_value!(self);
+                let mut tokens = attribute_value.split_whitespace();
+                Some(Attribute::Vector3(Vector3 {
+                    x: parse_primitive!(self, tokens, attribute_value, Keyvalues2SerializationError::ParseFloatError),
+                    y: parse_primitive!(self, tokens, attribute_value, Keyvalues2SerializationError::ParseFloatError),
+                    z: parse_primitive!(self, tokens, attribute_value, Keyvalues2SerializationError::ParseFloatError),
+                }))
+            }
+            "vector4" => {
+                let attribute_value = get_attribute_value!(self);
+                let mut tokens = attribute_value.split_whitespace();
+                Some(Attribute::Vector4(Vector4 {
+                    x: parse_primitive!(self, tokens, attribute_value, Keyvalues2SerializationError::ParseFloatError),
+                    y: parse_primitive!(self, tokens, attribute_value, Keyvalues2SerializationError::ParseFloatError),
+                    z: parse_primitive!(self, tokens, attribute_value, Keyvalues2SerializationError::ParseFloatError),
+                    w: parse_primitive!(self, tokens, attribute_value, Keyvalues2SerializationError::ParseFloatError),
+                }))
+            }
+            "qangle" => {
+                let attribute_value = get_attribute_value!(self);
+                let mut tokens = attribute_value.split_whitespace();
+
+                Some(Attribute::Angle(Angle {
+                    roll: parse_primitive!(self, tokens, attribute_value, Keyvalues2SerializationError::ParseFloatError),
+                    pitch: parse_primitive!(self, tokens, attribute_value, Keyvalues2SerializationError::ParseFloatError),
+                    yaw: parse_primitive!(self, tokens, attribute_value, Keyvalues2SerializationError::ParseFloatError),
+                }))
+            }
+            "quaternion" => {
+                let attribute_value = get_attribute_value!(self);
+                let mut tokens = attribute_value.split_whitespace();
+                Some(Attribute::Quaternion(Quaternion {
+                    x: parse_primitive!(self, tokens, attribute_value, Keyvalues2SerializationError::ParseFloatError),
+                    y: parse_primitive!(self, tokens, attribute_value, Keyvalues2SerializationError::ParseFloatError),
+                    z: parse_primitive!(self, tokens, attribute_value, Keyvalues2SerializationError::ParseFloatError),
+                    w: parse_primitive!(self, tokens, attribute_value, Keyvalues2SerializationError::ParseFloatError),
+                }))
+            }
+            "matrix" => {
+                let attribute_value = get_attribute_value!(self);
+                let mut tokens = attribute_value.split_whitespace();
+                Some(Attribute::Matrix(Matrix([
+                    [
+                        parse_primitive!(self, tokens, attribute_value, Keyvalues2SerializationError::ParseFloatError),
+                        parse_primitive!(self, tokens, attribute_value, Keyvalues2SerializationError::ParseFloatError),
+                        parse_primitive!(self, tokens, attribute_value, Keyvalues2SerializationError::ParseFloatError),
+                        parse_primitive!(self, tokens, attribute_value, Keyvalues2SerializationError::ParseFloatError),
+                    ],
+                    [
+                        parse_primitive!(self, tokens, attribute_value, Keyvalues2SerializationError::ParseFloatError),
+                        parse_primitive!(self, tokens, attribute_value, Keyvalues2SerializationError::ParseFloatError),
+                        parse_primitive!(self, tokens, attribute_value, Keyvalues2SerializationError::ParseFloatError),
+                        parse_primitive!(self, tokens, attribute_value, Keyvalues2SerializationError::ParseFloatError),
+                    ],
+                    [
+                        parse_primitive!(self, tokens, attribute_value, Keyvalues2SerializationError::ParseFloatError),
+                        parse_primitive!(self, tokens, attribute_value, Keyvalues2SerializationError::ParseFloatError),
+                        parse_primitive!(self, tokens, attribute_value, Keyvalues2SerializationError::ParseFloatError),
+                        parse_primitive!(self, tokens, attribute_value, Keyvalues2SerializationError::ParseFloatError),
+                    ],
+                    [
+                        parse_primitive!(self, tokens, attribute_value, Keyvalues2SerializationError::ParseFloatError),
+                        parse_primitive!(self, tokens, attribute_value, Keyvalues2SerializationError::ParseFloatError),
+                        parse_primitive!(self, tokens, attribute_value, Keyvalues2SerializationError::ParseFloatError),
+                        parse_primitive!(self, tokens, attribute_value, Keyvalues2SerializationError::ParseFloatError),
+                    ],
+                ])))
+            }
+            _ => None,
+        })
+    }
+
+    fn read_element_attribute(
+        &mut self,
+        element_class: String,
+        collected_elements: &mut IndexMap<UUID, Element>,
+        element_remap: &mut IndexMap<Element, Vec<(String, ElementAttributeRemap)>>,
+    ) -> Result<Element, Keyvalues2SerializationError> {
+        let mut element = Element::create(String::new(), element_class);
+        if collected_elements.insert(*element.get_id(), Element::clone(&element)).is_some() {
+            return Err(Keyvalues2SerializationError::DuplicateGeneratedElementId);
+        }
+
+        self.read_attributes(&mut element, collected_elements, element_remap)?;
+
+        Ok(element)
+    }
 }
 
-enum StringToken {
+enum ElementAttributeRemap {
+    Single(UUID),
+    Array(Vec<(usize, UUID)>),
+}
+
+enum ReadToken {
     String(String),
     OpenBrace,
     CloseBrace,
     OpenBracket,
     CloseBracket,
-}
-
-fn read_attribute<T: BufRead>(
-    reader: &mut StringReader<T>,
-    attribute_type: &str,
-    attribute_value: StringToken,
-    elements: &mut IndexMap<UUID, Element>,
-) -> Result<Attribute, Keyvalues2SerializationError> {
-    match attribute_type {
-        "element" => match attribute_value {
-            StringToken::String(value) => {
-                if value.is_empty() {
-                    return Ok(Attribute::Element(None));
-                }
-
-                let id = UUID::from_str(&value).map_err(|_| Keyvalues2SerializationError::FailedToParseUUID(reader.line_count))?;
-
-                match elements.entry(id) {
-                    indexmap::map::Entry::Occupied(occupied_entry) => Ok(Attribute::Element(Some(occupied_entry.get().clone()))),
-                    indexmap::map::Entry::Vacant(vacant_entry) => {
-                        let element = Element::full(Element::DEFAULT_ELEMENT_NAME, Element::DEFAULT_ELEMENT_CLASS, id);
-                        vacant_entry.insert(element.clone());
-                        Ok(Attribute::Element(Some(element)))
-                    }
-                }
-            }
-            _ => Err(Keyvalues2SerializationError::InvalidToken(reader.line_count)),
-        },
-        "int" => match attribute_value {
-            StringToken::String(value) => match value.parse() {
-                Ok(value) => Ok(Attribute::Integer(value)),
-                Err(_) => Err(Keyvalues2SerializationError::FailedToParseInteger(reader.line_count)),
-            },
-            _ => Err(Keyvalues2SerializationError::InvalidToken(reader.line_count)),
-        },
-        "float" => match attribute_value {
-            StringToken::String(value) => match value.parse() {
-                Ok(value) => Ok(Attribute::Float(value)),
-                Err(_) => Err(Keyvalues2SerializationError::FailedToParseFloat(reader.line_count)),
-            },
-            _ => Err(Keyvalues2SerializationError::InvalidToken(reader.line_count)),
-        },
-        "bool" => match attribute_value {
-            StringToken::String(value) => match value.parse::<u8>() {
-                Ok(value) => Ok(Attribute::Boolean(value != 0)),
-                Err(_) => Err(Keyvalues2SerializationError::FailedToParseInteger(reader.line_count)),
-            },
-            _ => Err(Keyvalues2SerializationError::InvalidToken(reader.line_count)),
-        },
-        "string" => match attribute_value {
-            StringToken::String(value) => Ok(Attribute::String(value)),
-            _ => Err(Keyvalues2SerializationError::InvalidToken(reader.line_count)),
-        },
-        "binary" => match attribute_value {
-            StringToken::String(value) => {
-                let mut block = BinaryBlock::default();
-
-                for byte in value.chars().filter(|c| !c.is_whitespace()).collect::<Vec<char>>().chunks(2) {
-                    let byte = byte.iter().collect::<String>();
-                    block
-                        .0
-                        .push(u8::from_str_radix(&byte, 16).map_err(|_| Keyvalues2SerializationError::FailedToParseInteger(reader.line_count))?);
-                }
-
-                Ok(Attribute::Binary(block))
-            }
-            _ => Err(Keyvalues2SerializationError::InvalidToken(reader.line_count)),
-        },
-        "elementid" => match attribute_value {
-            StringToken::String(value) => match value.parse() {
-                #[allow(deprecated)]
-                Ok(value) => Ok(Attribute::ObjectId(value)),
-                Err(_) => Err(Keyvalues2SerializationError::FailedToParseUUID(reader.line_count)),
-            },
-            _ => Err(Keyvalues2SerializationError::InvalidToken(reader.line_count)),
-        },
-        "time" => match attribute_value {
-            StringToken::String(value) => match value.parse() {
-                Ok(value) => Ok(Attribute::Time(Duration::from_secs_f64(value))),
-                Err(_) => Err(Keyvalues2SerializationError::FailedToParseFloat(reader.line_count)),
-            },
-            _ => Err(Keyvalues2SerializationError::InvalidToken(reader.line_count)),
-        },
-        "color" => match attribute_value {
-            StringToken::String(value) => {
-                let mut color = Color::default();
-
-                let mut tokens = value.split_whitespace();
-
-                color.red = tokens
-                    .next()
-                    .ok_or(Keyvalues2SerializationError::InvalidAttribute(reader.line_count))?
-                    .parse()
-                    .map_err(|_| Keyvalues2SerializationError::FailedToParseInteger(reader.line_count))?;
-
-                color.green = tokens
-                    .next()
-                    .ok_or(Keyvalues2SerializationError::InvalidAttribute(reader.line_count))?
-                    .parse()
-                    .map_err(|_| Keyvalues2SerializationError::FailedToParseInteger(reader.line_count))?;
-
-                color.blue = tokens
-                    .next()
-                    .ok_or(Keyvalues2SerializationError::InvalidAttribute(reader.line_count))?
-                    .parse()
-                    .map_err(|_| Keyvalues2SerializationError::FailedToParseInteger(reader.line_count))?;
-
-                color.alpha = tokens
-                    .next()
-                    .ok_or(Keyvalues2SerializationError::InvalidAttribute(reader.line_count))?
-                    .parse()
-                    .map_err(|_| Keyvalues2SerializationError::FailedToParseInteger(reader.line_count))?;
-
-                Ok(Attribute::Color(color))
-            }
-            _ => Err(Keyvalues2SerializationError::InvalidToken(reader.line_count)),
-        },
-        "vector2" => match attribute_value {
-            StringToken::String(value) => {
-                let mut tokens = value.split_whitespace();
-
-                Ok(Attribute::Vector2(Vector2 {
-                    x: get_float_token(reader, &mut tokens)?,
-                    y: get_float_token(reader, &mut tokens)?,
-                }))
-            }
-            _ => Err(Keyvalues2SerializationError::InvalidToken(reader.line_count)),
-        },
-        "vector3" => match attribute_value {
-            StringToken::String(value) => {
-                let mut tokens = value.split_whitespace();
-
-                Ok(Attribute::Vector3(Vector3 {
-                    x: get_float_token(reader, &mut tokens)?,
-                    y: get_float_token(reader, &mut tokens)?,
-                    z: get_float_token(reader, &mut tokens)?,
-                }))
-            }
-            _ => Err(Keyvalues2SerializationError::InvalidToken(reader.line_count)),
-        },
-        "vector4" => match attribute_value {
-            StringToken::String(value) => {
-                let mut tokens = value.split_whitespace();
-
-                Ok(Attribute::Vector4(Vector4 {
-                    x: get_float_token(reader, &mut tokens)?,
-                    y: get_float_token(reader, &mut tokens)?,
-                    z: get_float_token(reader, &mut tokens)?,
-                    w: get_float_token(reader, &mut tokens)?,
-                }))
-            }
-            _ => Err(Keyvalues2SerializationError::InvalidToken(reader.line_count)),
-        },
-        "qangle" => match attribute_value {
-            StringToken::String(value) => {
-                let mut tokens = value.split_whitespace();
-
-                Ok(Attribute::Angle(Angle {
-                    pitch: get_float_token(reader, &mut tokens)?,
-                    yaw: get_float_token(reader, &mut tokens)?,
-                    roll: get_float_token(reader, &mut tokens)?,
-                }))
-            }
-            _ => Err(Keyvalues2SerializationError::InvalidToken(reader.line_count)),
-        },
-        "quaternion" => match attribute_value {
-            StringToken::String(value) => {
-                let mut tokens = value.split_whitespace();
-
-                Ok(Attribute::Quaternion(Quaternion {
-                    x: get_float_token(reader, &mut tokens)?,
-                    y: get_float_token(reader, &mut tokens)?,
-                    z: get_float_token(reader, &mut tokens)?,
-                    w: get_float_token(reader, &mut tokens)?,
-                }))
-            }
-            _ => Err(Keyvalues2SerializationError::InvalidToken(reader.line_count)),
-        },
-        "matrix" => match attribute_value {
-            StringToken::String(value) => {
-                let mut tokens = value.split_whitespace();
-
-                Ok(Attribute::Matrix(Matrix([
-                    [
-                        get_float_token(reader, &mut tokens)?,
-                        get_float_token(reader, &mut tokens)?,
-                        get_float_token(reader, &mut tokens)?,
-                        get_float_token(reader, &mut tokens)?,
-                    ],
-                    [
-                        get_float_token(reader, &mut tokens)?,
-                        get_float_token(reader, &mut tokens)?,
-                        get_float_token(reader, &mut tokens)?,
-                        get_float_token(reader, &mut tokens)?,
-                    ],
-                    [
-                        get_float_token(reader, &mut tokens)?,
-                        get_float_token(reader, &mut tokens)?,
-                        get_float_token(reader, &mut tokens)?,
-                        get_float_token(reader, &mut tokens)?,
-                    ],
-                    [
-                        get_float_token(reader, &mut tokens)?,
-                        get_float_token(reader, &mut tokens)?,
-                        get_float_token(reader, &mut tokens)?,
-                        get_float_token(reader, &mut tokens)?,
-                    ],
-                ])))
-            }
-            _ => Err(Keyvalues2SerializationError::InvalidToken(reader.line_count)),
-        },
-        "element_array" => match attribute_value {
-            StringToken::OpenBracket => {
-                let mut values = Vec::new();
-
-                loop {
-                    match reader.next_token()? {
-                        Some(StringToken::CloseBracket) => break,
-                        Some(StringToken::String(attribute_class)) => {
-                            let element_token = reader.next_token()?;
-
-                            values.push(match element_token {
-                                Some(StringToken::String(element_id)) => {
-                                    if element_id.is_empty() {
-                                        return Ok(Attribute::Element(None));
-                                    }
-
-                                    let id = UUID::from_str(&element_id).map_err(|_| Keyvalues2SerializationError::FailedToParseUUID(reader.line_count))?;
-
-                                    match elements.entry(id) {
-                                        indexmap::map::Entry::Occupied(occupied_entry) => Some(occupied_entry.get().clone()),
-                                        indexmap::map::Entry::Vacant(vacant_entry) => {
-                                            let element = Element::default();
-                                            vacant_entry.insert(element.clone());
-                                            Some(element)
-                                        }
-                                    }
-                                }
-                                Some(StringToken::OpenBrace) => Some(read_element(reader, attribute_class, elements)?),
-                                Some(_) => return Err(Keyvalues2SerializationError::InvalidToken(reader.line_count)),
-                                None => return Err(Keyvalues2SerializationError::UnfinishedAttribute),
-                            });
-                        }
-                        _ => return Err(Keyvalues2SerializationError::UnfinishedAttribute),
-                    }
-                }
-
-                Ok(Attribute::ElementArray(values))
-            }
-            _ => Err(Keyvalues2SerializationError::InvalidToken(reader.line_count)),
-        },
-        "int_array" => match attribute_value {
-            StringToken::OpenBracket => {
-                let mut values = Vec::new();
-
-                loop {
-                    match reader.next_token()? {
-                        Some(StringToken::CloseBracket) => break,
-                        Some(value) => match value {
-                            StringToken::String(value) => match value.parse() {
-                                Ok(value) => values.push(value),
-                                Err(_) => return Err(Keyvalues2SerializationError::FailedToParseInteger(reader.line_count)),
-                            },
-                            _ => return Err(Keyvalues2SerializationError::InvalidToken(reader.line_count)),
-                        },
-                        _ => return Err(Keyvalues2SerializationError::UnfinishedAttribute),
-                    }
-                }
-
-                Ok(Attribute::IntegerArray(values))
-            }
-            _ => Err(Keyvalues2SerializationError::InvalidToken(reader.line_count)),
-        },
-        "float_array" => match attribute_value {
-            StringToken::OpenBracket => {
-                let mut values = Vec::new();
-
-                loop {
-                    match reader.next_token()? {
-                        Some(StringToken::CloseBracket) => break,
-                        Some(value) => match value {
-                            StringToken::String(value) => match value.parse() {
-                                Ok(value) => values.push(value),
-                                Err(_) => return Err(Keyvalues2SerializationError::FailedToParseFloat(reader.line_count)),
-                            },
-                            _ => return Err(Keyvalues2SerializationError::InvalidToken(reader.line_count)),
-                        },
-                        _ => return Err(Keyvalues2SerializationError::UnfinishedAttribute),
-                    }
-                }
-
-                Ok(Attribute::FloatArray(values))
-            }
-            _ => Err(Keyvalues2SerializationError::InvalidToken(reader.line_count)),
-        },
-        "bool_array" => match attribute_value {
-            StringToken::OpenBracket => {
-                let mut values = Vec::new();
-
-                loop {
-                    match reader.next_token()? {
-                        Some(StringToken::CloseBracket) => break,
-                        Some(value) => match value {
-                            StringToken::String(value) => match value.parse::<u8>() {
-                                Ok(value) => values.push(value != 0),
-                                Err(_) => return Err(Keyvalues2SerializationError::FailedToParseInteger(reader.line_count)),
-                            },
-                            _ => return Err(Keyvalues2SerializationError::InvalidToken(reader.line_count)),
-                        },
-                        _ => return Err(Keyvalues2SerializationError::UnfinishedAttribute),
-                    }
-                }
-
-                Ok(Attribute::BooleanArray(values))
-            }
-            _ => Err(Keyvalues2SerializationError::InvalidToken(reader.line_count)),
-        },
-        "string_array" => match attribute_value {
-            StringToken::OpenBracket => {
-                let mut values = Vec::new();
-
-                loop {
-                    match reader.next_token()? {
-                        Some(StringToken::CloseBracket) => break,
-                        Some(value) => match value {
-                            StringToken::String(value) => values.push(value),
-                            _ => return Err(Keyvalues2SerializationError::InvalidToken(reader.line_count)),
-                        },
-                        _ => return Err(Keyvalues2SerializationError::UnfinishedAttribute),
-                    }
-                }
-
-                Ok(Attribute::StringArray(values))
-            }
-            _ => Err(Keyvalues2SerializationError::InvalidToken(reader.line_count)),
-        },
-        "binary_array" => match attribute_value {
-            StringToken::OpenBracket => {
-                let mut values = Vec::new();
-
-                loop {
-                    match reader.next_token()? {
-                        Some(StringToken::CloseBracket) => break,
-                        Some(value) => match value {
-                            StringToken::String(value) => {
-                                let mut block = BinaryBlock::default();
-
-                                for byte in value.chars().filter(|c| !c.is_whitespace()).collect::<Vec<char>>().chunks(2) {
-                                    let byte = byte.iter().collect::<String>();
-                                    block.0.push(
-                                        u8::from_str_radix(&byte, 16).map_err(|_| Keyvalues2SerializationError::FailedToParseInteger(reader.line_count))?,
-                                    );
-                                }
-
-                                values.push(block);
-                            }
-                            _ => return Err(Keyvalues2SerializationError::InvalidToken(reader.line_count)),
-                        },
-                        _ => return Err(Keyvalues2SerializationError::UnfinishedAttribute),
-                    }
-                }
-
-                Ok(Attribute::BinaryArray(values))
-            }
-            _ => Err(Keyvalues2SerializationError::InvalidToken(reader.line_count)),
-        },
-        "elementid_array" => match attribute_value {
-            StringToken::OpenBracket => {
-                let mut values = Vec::new();
-
-                loop {
-                    match reader.next_token()? {
-                        Some(StringToken::CloseBracket) => break,
-                        Some(value) => match value {
-                            StringToken::String(value) => match value.parse() {
-                                Ok(value) => values.push(value),
-                                Err(_) => return Err(Keyvalues2SerializationError::FailedToParseUUID(reader.line_count)),
-                            },
-                            _ => return Err(Keyvalues2SerializationError::InvalidToken(reader.line_count)),
-                        },
-                        _ => return Err(Keyvalues2SerializationError::UnfinishedAttribute),
-                    }
-                }
-
-                #[allow(deprecated)]
-                Ok(Attribute::ObjectIdArray(values))
-            }
-            _ => Err(Keyvalues2SerializationError::InvalidToken(reader.line_count)),
-        },
-        "time_array" => match attribute_value {
-            StringToken::OpenBracket => {
-                let mut values = Vec::new();
-
-                loop {
-                    match reader.next_token()? {
-                        Some(StringToken::CloseBracket) => break,
-                        Some(value) => match value {
-                            StringToken::String(value) => match value.parse() {
-                                Ok(value) => values.push(Duration::from_secs_f64(value)),
-                                Err(_) => return Err(Keyvalues2SerializationError::FailedToParseFloat(reader.line_count)),
-                            },
-                            _ => return Err(Keyvalues2SerializationError::InvalidToken(reader.line_count)),
-                        },
-                        _ => return Err(Keyvalues2SerializationError::UnfinishedAttribute),
-                    }
-                }
-
-                Ok(Attribute::TimeArray(values))
-            }
-            _ => Err(Keyvalues2SerializationError::InvalidToken(reader.line_count)),
-        },
-        "color_array" => match attribute_value {
-            StringToken::OpenBracket => {
-                let mut values = Vec::new();
-
-                loop {
-                    match reader.next_token()? {
-                        Some(StringToken::CloseBracket) => break,
-                        Some(value) => match value {
-                            StringToken::String(value) => {
-                                let mut color = Color::default();
-
-                                let mut tokens = value.split_whitespace();
-
-                                color.red = tokens
-                                    .next()
-                                    .ok_or(Keyvalues2SerializationError::InvalidAttribute(reader.line_count))?
-                                    .parse()
-                                    .map_err(|_| Keyvalues2SerializationError::FailedToParseInteger(reader.line_count))?;
-
-                                color.green = tokens
-                                    .next()
-                                    .ok_or(Keyvalues2SerializationError::InvalidAttribute(reader.line_count))?
-                                    .parse()
-                                    .map_err(|_| Keyvalues2SerializationError::FailedToParseInteger(reader.line_count))?;
-
-                                color.blue = tokens
-                                    .next()
-                                    .ok_or(Keyvalues2SerializationError::InvalidAttribute(reader.line_count))?
-                                    .parse()
-                                    .map_err(|_| Keyvalues2SerializationError::FailedToParseInteger(reader.line_count))?;
-
-                                color.alpha = tokens
-                                    .next()
-                                    .ok_or(Keyvalues2SerializationError::InvalidAttribute(reader.line_count))?
-                                    .parse()
-                                    .map_err(|_| Keyvalues2SerializationError::FailedToParseInteger(reader.line_count))?;
-
-                                values.push(color);
-                            }
-                            _ => return Err(Keyvalues2SerializationError::InvalidToken(reader.line_count)),
-                        },
-                        _ => return Err(Keyvalues2SerializationError::UnfinishedAttribute),
-                    }
-                }
-
-                Ok(Attribute::ColorArray(values))
-            }
-            _ => Err(Keyvalues2SerializationError::InvalidToken(reader.line_count)),
-        },
-        "vector2_array" => match attribute_value {
-            StringToken::OpenBracket => {
-                let mut values = Vec::new();
-
-                loop {
-                    match reader.next_token()? {
-                        Some(StringToken::CloseBracket) => break,
-                        Some(value) => match value {
-                            StringToken::String(value) => {
-                                let mut tokens = value.split_whitespace();
-
-                                values.push(Vector2 {
-                                    x: get_float_token(reader, &mut tokens)?,
-                                    y: get_float_token(reader, &mut tokens)?,
-                                });
-                            }
-                            _ => return Err(Keyvalues2SerializationError::InvalidToken(reader.line_count)),
-                        },
-                        _ => return Err(Keyvalues2SerializationError::UnfinishedAttribute),
-                    }
-                }
-
-                Ok(Attribute::Vector2Array(values))
-            }
-            _ => Err(Keyvalues2SerializationError::InvalidToken(reader.line_count)),
-        },
-        "vector3_array" => match attribute_value {
-            StringToken::OpenBracket => {
-                let mut values = Vec::new();
-
-                loop {
-                    match reader.next_token()? {
-                        Some(StringToken::CloseBracket) => break,
-                        Some(value) => match value {
-                            StringToken::String(value) => {
-                                let mut tokens = value.split_whitespace();
-
-                                values.push(Vector3 {
-                                    x: get_float_token(reader, &mut tokens)?,
-                                    y: get_float_token(reader, &mut tokens)?,
-                                    z: get_float_token(reader, &mut tokens)?,
-                                });
-                            }
-                            _ => return Err(Keyvalues2SerializationError::InvalidToken(reader.line_count)),
-                        },
-                        _ => return Err(Keyvalues2SerializationError::UnfinishedAttribute),
-                    }
-                }
-
-                Ok(Attribute::Vector3Array(values))
-            }
-            _ => Err(Keyvalues2SerializationError::InvalidToken(reader.line_count)),
-        },
-        "vector4_array" => match attribute_value {
-            StringToken::OpenBracket => {
-                let mut values = Vec::new();
-
-                loop {
-                    match reader.next_token()? {
-                        Some(StringToken::CloseBracket) => break,
-                        Some(value) => match value {
-                            StringToken::String(value) => {
-                                let mut tokens = value.split_whitespace();
-
-                                values.push(Vector4 {
-                                    x: get_float_token(reader, &mut tokens)?,
-                                    y: get_float_token(reader, &mut tokens)?,
-                                    z: get_float_token(reader, &mut tokens)?,
-                                    w: get_float_token(reader, &mut tokens)?,
-                                });
-                            }
-                            _ => return Err(Keyvalues2SerializationError::InvalidToken(reader.line_count)),
-                        },
-                        _ => return Err(Keyvalues2SerializationError::UnfinishedAttribute),
-                    }
-                }
-
-                Ok(Attribute::Vector4Array(values))
-            }
-            _ => Err(Keyvalues2SerializationError::InvalidToken(reader.line_count)),
-        },
-        "qangle_array" => match attribute_value {
-            StringToken::OpenBracket => {
-                let mut values = Vec::new();
-
-                loop {
-                    match reader.next_token()? {
-                        Some(StringToken::CloseBracket) => break,
-                        Some(value) => match value {
-                            StringToken::String(value) => {
-                                let mut tokens = value.split_whitespace();
-
-                                values.push(Angle {
-                                    pitch: get_float_token(reader, &mut tokens)?,
-                                    yaw: get_float_token(reader, &mut tokens)?,
-                                    roll: get_float_token(reader, &mut tokens)?,
-                                });
-                            }
-                            _ => return Err(Keyvalues2SerializationError::InvalidToken(reader.line_count)),
-                        },
-                        _ => return Err(Keyvalues2SerializationError::UnfinishedAttribute),
-                    }
-                }
-
-                Ok(Attribute::AngleArray(values))
-            }
-            _ => Err(Keyvalues2SerializationError::InvalidToken(reader.line_count)),
-        },
-        "quaternion_array" => match attribute_value {
-            StringToken::OpenBracket => {
-                let mut values = Vec::new();
-
-                loop {
-                    match reader.next_token()? {
-                        Some(StringToken::CloseBracket) => break,
-                        Some(value) => match value {
-                            StringToken::String(value) => {
-                                let mut tokens = value.split_whitespace();
-
-                                values.push(Quaternion {
-                                    x: get_float_token(reader, &mut tokens)?,
-                                    y: get_float_token(reader, &mut tokens)?,
-                                    z: get_float_token(reader, &mut tokens)?,
-                                    w: get_float_token(reader, &mut tokens)?,
-                                });
-                            }
-                            _ => return Err(Keyvalues2SerializationError::InvalidToken(reader.line_count)),
-                        },
-                        _ => return Err(Keyvalues2SerializationError::UnfinishedAttribute),
-                    }
-                }
-
-                Ok(Attribute::QuaternionArray(values))
-            }
-            _ => Err(Keyvalues2SerializationError::InvalidToken(reader.line_count)),
-        },
-        "matrix_array" => match attribute_value {
-            StringToken::OpenBracket => {
-                let mut values = Vec::new();
-
-                loop {
-                    match reader.next_token()? {
-                        Some(StringToken::CloseBracket) => break,
-                        Some(value) => match value {
-                            StringToken::String(value) => {
-                                let mut tokens = value.split_whitespace();
-
-                                values.push(Matrix([
-                                    [
-                                        get_float_token(reader, &mut tokens)?,
-                                        get_float_token(reader, &mut tokens)?,
-                                        get_float_token(reader, &mut tokens)?,
-                                        get_float_token(reader, &mut tokens)?,
-                                    ],
-                                    [
-                                        get_float_token(reader, &mut tokens)?,
-                                        get_float_token(reader, &mut tokens)?,
-                                        get_float_token(reader, &mut tokens)?,
-                                        get_float_token(reader, &mut tokens)?,
-                                    ],
-                                    [
-                                        get_float_token(reader, &mut tokens)?,
-                                        get_float_token(reader, &mut tokens)?,
-                                        get_float_token(reader, &mut tokens)?,
-                                        get_float_token(reader, &mut tokens)?,
-                                    ],
-                                    [
-                                        get_float_token(reader, &mut tokens)?,
-                                        get_float_token(reader, &mut tokens)?,
-                                        get_float_token(reader, &mut tokens)?,
-                                        get_float_token(reader, &mut tokens)?,
-                                    ],
-                                ]));
-                            }
-                            _ => return Err(Keyvalues2SerializationError::InvalidToken(reader.line_count)),
-                        },
-                        _ => return Err(Keyvalues2SerializationError::UnfinishedAttribute),
-                    }
-                }
-
-                Ok(Attribute::MatrixArray(values))
-            }
-            _ => Err(Keyvalues2SerializationError::InvalidToken(reader.line_count)),
-        },
-        _ => match attribute_value {
-            StringToken::OpenBrace => Ok(Attribute::Element(Some(read_element(reader, attribute_type.to_string(), elements)?))),
-            _ => Err(Keyvalues2SerializationError::UnknownAttribute(reader.line_count)),
-        },
-    }
-}
-
-fn get_float_token<T: BufRead>(reader: &mut StringReader<T>, stream: &mut SplitWhitespace<'_>) -> Result<f32, Keyvalues2SerializationError> {
-    stream
-        .next()
-        .ok_or(Keyvalues2SerializationError::InvalidAttribute(reader.line_count))?
-        .parse()
-        .map_err(|_| Keyvalues2SerializationError::FailedToParseInteger(reader.line_count))
-}
-
-fn read_element<T: BufRead>(
-    reader: &mut StringReader<T>,
-    class: String,
-    elements: &mut IndexMap<UUID, Element>,
-) -> Result<Element, Keyvalues2SerializationError> {
-    let mut attributes = IndexMap::new();
-    let mut element_id = None;
-    let mut element_name = None;
-
-    while let Some(token) = reader.next_token()? {
-        match token {
-            StringToken::String(attribute_name) => {
-                let attribute_type = match reader.next_token()? {
-                    Some(StringToken::String(attribute_type)) => attribute_type,
-                    _ => return Err(Keyvalues2SerializationError::InvalidToken(reader.line_count)),
-                };
-
-                let attribute_value = match reader.next_token()? {
-                    Some(value) => value,
-                    None => return Err(Keyvalues2SerializationError::UnfinishedAttribute),
-                };
-
-                if &attribute_name == "name" {
-                    if attribute_type != "string" {
-                        return Err(Keyvalues2SerializationError::AttributeType(reader.line_count));
-                    }
-
-                    element_name = Some(match attribute_value {
-                        StringToken::String(value) => value,
-                        _ => return Err(Keyvalues2SerializationError::InvalidToken(reader.line_count)),
-                    });
-
-                    continue;
-                }
-
-                if &attribute_name == "id" {
-                    if attribute_type != "elementid" {
-                        return Err(Keyvalues2SerializationError::AttributeType(reader.line_count));
-                    }
-
-                    let id = match attribute_value {
-                        StringToken::String(value) => match UUID::from_str(&value) {
-                            Ok(id) => id,
-                            Err(_) => return Err(Keyvalues2SerializationError::FailedToParseUUID(reader.line_count)),
-                        },
-                        _ => return Err(Keyvalues2SerializationError::InvalidToken(reader.line_count)),
-                    };
-
-                    match element_id {
-                        Some(id) => {
-                            return Err(Keyvalues2SerializationError::DuplicateElementId(id));
-                        }
-                        None => element_id = Some(id),
-                    }
-                    continue;
-                }
-
-                let created_attribute = read_attribute(reader, &attribute_type, attribute_value, elements)?;
-
-                attributes.insert(attribute_name, created_attribute);
-            }
-            StringToken::CloseBrace => {
-                let element_id = match element_id {
-                    Some(id) => id,
-                    None => UUID::new_v4(),
-                };
-
-                let mut element = match elements.entry(element_id) {
-                    indexmap::map::Entry::Occupied(occupied_entry) => occupied_entry.get().clone(),
-                    indexmap::map::Entry::Vacant(vacant_entry) => {
-                        let element = Element::full(element_name.unwrap_or(String::from(Element::DEFAULT_ELEMENT_NAME)), class, element_id);
-                        vacant_entry.insert(element.clone());
-                        element
-                    }
-                };
-
-                for (name, attribute) in attributes {
-                    element.set_attribute(name, attribute);
-                }
-
-                return Ok(element);
-            }
-            _ => return Err(Keyvalues2SerializationError::InvalidToken(reader.line_count)),
-        }
-    }
-
-    Err(Keyvalues2SerializationError::InvalidAttribute(reader.line_count))
 }
 
 /// Serialize elements to a text format.
@@ -1474,7 +1235,7 @@ impl Serializer for KeyValues2Serializer {
 
     fn serialize(buffer: &mut impl Write, header: &Header, root: &Element) -> Result<(), Self::Error> {
         let mut writer = StringWriter::new(buffer);
-        writer.write_raw(&header.create_header(Self::name(), Self::version()))?;
+        writer.write_header(&header.create_header(Self::name(), Self::version()))?;
 
         fn collect_elements(root: Element, elements: &mut IndexMap<Element, usize>) {
             elements.insert(root.clone(), if elements.is_empty() { 1 } else { 0 });
@@ -1513,15 +1274,15 @@ impl Serializer for KeyValues2Serializer {
         let mut collected_elements = IndexMap::new();
         collect_elements(root.clone(), &mut collected_elements);
 
-        for (element, use_count) in &collected_elements {
-            if *use_count == 0 {
+        for (element, &use_count) in &collected_elements {
+            if use_count == 0 {
                 continue;
             }
 
-            writer.write_line(&format!("{:?}", element.get_class()))?;
+            writer.write_line(&format!("\"{}\"", writer.format_escape_characters(&element.get_class())))?;
             writer.write_open_brace()?;
             writer.write_line(&format!("\"id\" \"elementid\" \"{}\"", element.get_id()))?;
-            writer.write_line(&format!("\"name\" \"string\" \"{}\"", element.get_name()))?;
+            writer.write_line(&format!("\"name\" \"string\" \"{}\"", writer.format_escape_characters(&element.get_name())))?;
             writer.write_attributes(element, &collected_elements)?;
             writer.write_close_brace()?;
             writer.write_line("")?;
@@ -1540,28 +1301,47 @@ impl Serializer for KeyValues2Serializer {
         }
 
         let mut reader = StringReader::new(buffer);
-        let mut elements = IndexMap::new();
+        let mut collected_elements = IndexMap::new();
+        let mut element_remap = IndexMap::new();
         let mut root = None;
 
-        while let Some(token) = reader.next_token()? {
-            match token {
-                StringToken::String(class) => match reader.next_token()? {
-                    Some(StringToken::OpenBrace) => {
-                        if root.is_none() {
-                            root = Some(read_element(&mut reader, class, &mut elements)?);
-                            continue;
-                        }
-
-                        read_element(&mut reader, class, &mut elements)?;
-                    }
-                    Some(_) => return Err(Keyvalues2SerializationError::InvalidToken(reader.line_count)),
-                    None => return Err(Keyvalues2SerializationError::UnfinishedAttribute),
-                },
-                _ => return Err(Keyvalues2SerializationError::InvalidToken(reader.line_count)),
+        while let Some(root_element) = reader.read_element(&mut collected_elements, &mut element_remap)? {
+            if root.is_none() {
+                root = Some(root_element);
             }
         }
 
-        Ok(root.unwrap_or_default())
+        for (mut element, remapping) in element_remap {
+            for (attribute_name, attribute_remap) in remapping {
+                match attribute_remap {
+                    ElementAttributeRemap::Single(uuid) => {
+                        if let Some(reference_element) = collected_elements.get(&uuid) {
+                            element.set_attribute(attribute_name, Attribute::Element(Some(Element::clone(reference_element))));
+                        }
+                    }
+                    ElementAttributeRemap::Array(remaps) => {
+                        if let Some(mut remapped_array) = element.get_attribute(&attribute_name).and_then(|attr| match attr.clone() {
+                            Attribute::ElementArray(arr) => Some(arr),
+                            _ => None,
+                        }) {
+                            for (index, uuid) in remaps {
+                                if let Some(reference_element) = collected_elements.get(&uuid) {
+                                    remapped_array[index] = Some(Element::clone(reference_element));
+                                }
+                            }
+
+                            element.set_attribute(attribute_name, Attribute::ElementArray(remapped_array));
+                        }
+                    }
+                }
+            }
+        }
+
+        if let Some(root_element) = root {
+            return Ok(root_element);
+        }
+
+        Err(Keyvalues2SerializationError::NoElements)
     }
 }
 
@@ -1583,7 +1363,7 @@ impl Serializer for KeyValues2FlatSerializer {
 
     fn serialize(buffer: &mut impl Write, header: &Header, root: &Element) -> Result<(), Self::Error> {
         let mut writer = StringWriter::new(buffer);
-        writer.write_raw(&header.create_header(Self::name(), Self::version()))?;
+        writer.write_header(&header.create_header(Self::name(), Self::version()))?;
 
         fn collect_elements(root: Element, elements: &mut IndexMap<Element, usize>) {
             elements.insert(root.clone(), 1);
@@ -1592,7 +1372,8 @@ impl Serializer for KeyValues2FlatSerializer {
                 match attribute {
                     Attribute::Element(value) => match value {
                         Some(element) => {
-                            if elements.get_mut(element).is_some() {
+                            if let Some(count) = elements.get_mut(element) {
+                                *count += 1;
                                 continue;
                             }
                             collect_elements(element.clone(), elements);
@@ -1603,7 +1384,8 @@ impl Serializer for KeyValues2FlatSerializer {
                         for value in values {
                             match value {
                                 Some(element) => {
-                                    if elements.get_mut(element).is_some() {
+                                    if let Some(count) = elements.get_mut(element) {
+                                        *count += 1;
                                         continue;
                                     }
                                     collect_elements(element.clone(), elements);
@@ -1620,11 +1402,15 @@ impl Serializer for KeyValues2FlatSerializer {
         let mut collected_elements = IndexMap::new();
         collect_elements(root.clone(), &mut collected_elements);
 
-        for element in collected_elements.keys() {
-            writer.write_line(&format!("{:?}", element.get_class()))?;
+        for (element, &use_count) in &collected_elements {
+            if use_count == 0 {
+                continue;
+            }
+
+            writer.write_line(&format!("\"{}\"", writer.format_escape_characters(&element.get_class())))?;
             writer.write_open_brace()?;
             writer.write_line(&format!("\"id\" \"elementid\" \"{}\"", element.get_id()))?;
-            writer.write_line(&format!("\"name\" \"string\" \"{}\"", element.get_name()))?;
+            writer.write_line(&format!("\"name\" \"string\" \"{}\"", writer.format_escape_characters(&element.get_name())))?;
             writer.write_attributes(element, &collected_elements)?;
             writer.write_close_brace()?;
             writer.write_line("")?;

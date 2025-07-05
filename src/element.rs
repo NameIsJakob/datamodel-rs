@@ -115,6 +115,12 @@ impl Element {
         Ref::map(element_data, |element: &ElementData| &element.id)
     }
 
+    /// Sets the id of the element.
+    pub fn set_id(&self, id: UUID) {
+        let mut element_data = self.0.borrow_mut();
+        element_data.id = id;
+    }
+
     /// Returns the attribute with the given name. If the attribute does not exist, returns None.
     pub fn get_attribute(&self, name: impl AsRef<str>) -> Option<Ref<Attribute>> {
         let element_data = self.0.borrow();
