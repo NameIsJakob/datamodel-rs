@@ -1,5 +1,5 @@
 use std::{
-    alloc::{alloc, Layout},
+    alloc::{Layout, alloc},
     io::{BufRead, Error, Write},
     mem::{align_of, size_of},
     ptr::read as read_aligned,
@@ -11,8 +11,8 @@ use thiserror::Error as ThisError;
 use uuid::Uuid as UUID;
 
 use crate::{
-    attribute::{Attribute, BinaryBlock},
     Element, Header, Serializer,
+    attribute::{Attribute, BinaryBlock},
 };
 
 #[derive(Debug, ThisError)]

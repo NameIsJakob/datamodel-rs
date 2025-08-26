@@ -8,8 +8,8 @@ use thiserror::Error as ThisError;
 use uuid::Uuid as UUID;
 
 use crate::{
-    attribute::{Angle, Attribute, BinaryBlock, Color, Matrix, Quaternion, Vector2, Vector3, Vector4},
     Element, Header, Serializer,
+    attribute::{Angle, Attribute, BinaryBlock, Color, Matrix, Quaternion, Vector2, Vector3, Vector4},
 };
 
 #[derive(Debug, ThisError)]

@@ -50,8 +50,8 @@ pub use element::Element;
 pub mod serializers;
 
 mod serializing;
-pub use serializing::deserialize;
 pub use serializing::FileHeaderError;
 pub use serializing::Header;
 pub use serializing::SerializationError;
 pub use serializing::Serializer;
+pub use serializing::deserialize;

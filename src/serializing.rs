@@ -7,8 +7,8 @@ use regex::Regex;
 use thiserror::Error as ThisError;
 
 use crate::{
-    serializers::{BinarySerializationError, BinarySerializer, KeyValues2FlatSerializer, KeyValues2Serializer, Keyvalues2SerializationError},
     Element,
+    serializers::{BinarySerializationError, BinarySerializer, KeyValues2FlatSerializer, KeyValues2Serializer, Keyvalues2SerializationError},
 };
 
 #[derive(Debug, ThisError)]
