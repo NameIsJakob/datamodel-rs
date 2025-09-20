@@ -1,8 +1,6 @@
-use std::{
-    io::{BufRead, Error as IOError, Write},
-    time::Duration,
-};
+use std::io::{BufRead, Error as IOError, Write};
 
+use chrono::Duration;
 use indexmap::IndexMap;
 use thiserror::Error as ThisError;
 use uuid::Uuid as UUID;
@@ -188,7 +186,7 @@ impl<T: Write> StringWriter<T> {
                     self.tab_index -= 1;
                     self.write_line("\"")?;
                 }
-                Attribute::Time(time) => write_attribute_string!(self, name, attribute_type_name, time.as_secs_f64())?,
+                Attribute::Time(time) => write_attribute_string!(self, name, attribute_type_name, time.as_seconds_f64())?,
                 Attribute::Color(color) => write_attribute_string!(
                     self,
                     name,
@@ -354,9 +352,9 @@ impl<T: Write> StringWriter<T> {
                     self.write_open_bracket()?;
                     if let Some((last_time, times)) = times.split_last() {
                         for time in times {
-                            self.write_line(&format!("\"{}\",", time.as_secs_f64()))?;
+                            self.write_line(&format!("\"{}\",", time.as_seconds_f64()))?;
                         }
-                        self.write_line(&format!("\"{}\"", last_time.as_secs_f64()))?;
+                        self.write_line(&format!("\"{}\"", last_time.as_seconds_f64()))?;
                     }
                     self.write_close_bracket()?;
                 }
@@ -1090,11 +1088,9 @@ impl<T: BufRead> StringReader<T> {
             }
             "time" => {
                 let attribute_value = get_attribute_value!(self);
-                Some(Attribute::Time(Duration::from_secs_f32(parse_primitive!(
-                    self,
-                    attribute_value,
-                    Keyvalues2SerializationError::ParseFloatError
-                ))))
+                let time: f64 = parse_primitive!(self, attribute_value, Keyvalues2SerializationError::ParseFloatError);
+                let nanoseconds = time * 1_000_000_000.0;
+                Some(Attribute::Time(Duration::nanoseconds(nanoseconds as i64)))
             }
             "color" => {
                 let attribute_value = get_attribute_value!(self);

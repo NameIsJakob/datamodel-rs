@@ -1,7 +1,6 @@
 //! The supported types that data model uses.
 
-use std::time::Duration;
-
+use chrono::Duration;
 use uuid::Uuid as UUID;
 
 use crate::Element;

@@ -3,9 +3,9 @@ use std::{
     io::{BufRead, Error, Write},
     mem::{align_of, size_of},
     ptr::read as read_aligned,
-    time::Duration,
 };
 
+use chrono::Duration;
 use indexmap::IndexSet;
 use thiserror::Error as ThisError;
 use uuid::Uuid as UUID;
@@ -350,7 +350,7 @@ impl Serializer for BinarySerializer {
                     }
                     Attribute::Time(value) => {
                         writer.write_byte(7)?;
-                        writer.write_int((value.as_secs_f64() * 10_000f64) as i32)?;
+                        writer.write_int((value.as_seconds_f64() * 10_000f64) as i32)?;
                     }
                     Attribute::Color(value) => {
                         writer.write_byte(8)?;
@@ -478,7 +478,7 @@ impl Serializer for BinarySerializer {
                         writer.write_byte(21)?;
                         writer.write_length(value.len())?;
                         for time in value {
-                            writer.write_int((time.as_secs_f64() * 10_000f64) as i32)?;
+                            writer.write_int((time.as_seconds_f64() * 10_000f64) as i32)?;
                         }
                     }
                     Attribute::ColorArray(value) => {
@@ -636,7 +636,8 @@ impl Serializer for BinarySerializer {
                             Attribute::ObjectId(reader.read_uuid()?)
                         } else {
                             let attribute_data_value = reader.read::<i32>()?;
-                            let element_data = Duration::from_secs_f64(attribute_data_value as f64 / 10_000f64);
+                            let nanoseconds = (attribute_data_value as f64 / 10_000.0) * 1_000_000_000.0;
+                            let element_data = Duration::nanoseconds(nanoseconds as i64);
                             Attribute::Time(element_data)
                         }
                     }
@@ -703,7 +704,10 @@ impl Serializer for BinarySerializer {
                         } else {
                             let attribute_array_count = reader.read()?;
                             let attribute_data_values = reader.read_array::<i32>(attribute_array_count)?;
-                            let attribute_data = attribute_data_values.iter().map(|x| Duration::from_secs_f64((*x as f64) / 10_000f64)).collect();
+                            let attribute_data = attribute_data_values
+                                .iter()
+                                .map(|&x| Duration::nanoseconds(((x as f64 / 10_000.0) * 1_000_000_000.0) as i64))
+                                .collect();
                             Attribute::TimeArray(attribute_data)
                         }
                     }
