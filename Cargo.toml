@@ -1,10 +1,10 @@
 [package]
 name = "datamodel"
-version = "0.6.2"
+version = "0.7.0"
 edition = "2024"
-authors = ["Jakobg1215"]
+authors = ["NameIsJakob"]
 description = "A rust library to serialize and deserialize Valve's proprietary DMX file format."
-repository = "https://github.com/Jakobg1215/datamodel-rs/"
+repository = "https://github.com/NameIsJakob/datamodel-rs/"
 license = "MIT"
 keywords = ["valve", "source-engine", "datamodel"]
 categories = ["parser-implementations"]
