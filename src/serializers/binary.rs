@@ -89,10 +89,10 @@ impl Serializer for BinarySerializer {
 
                 match attribute_value {
                     Attribute::Element(value) => {
-                        if let Some(element) = value {
-                            if collected_elements.insert(Element::clone(element)) {
-                                element_collection_stack.push(Element::clone(element));
-                            }
+                        if let Some(element) = value
+                            && collected_elements.insert(Element::clone(element))
+                        {
+                            element_collection_stack.push(Element::clone(element));
                         }
                     }
                     Attribute::String(value) => {
@@ -505,7 +505,7 @@ impl Serializer for BinarySerializer {
         }
 
         for current_element_index in 0..element_table.len() {
-            let mut current_element = Element::clone(&element_table[current_element_index as usize]);
+            let mut current_element = Element::clone(&element_table[current_element_index]);
             let current_element_attribute_length = reader.read_integer()?;
             if current_element_attribute_length < 0 {
                 return Err(BinarySerializationError::InvalidAttributeCount {
