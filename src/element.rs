@@ -86,7 +86,7 @@ impl Element {
     }
 
     /// Returns the name of the element.
-    pub fn get_name(&self) -> Ref<String> {
+    pub fn get_name(&'_ self) -> Ref<'_, String> {
         let element_data = self.0.borrow();
         Ref::map(element_data, |element| &element.name)
     }
@@ -98,7 +98,7 @@ impl Element {
     }
 
     /// Returns the class of the element.
-    pub fn get_class(&self) -> Ref<String> {
+    pub fn get_class(&'_ self) -> Ref<'_, String> {
         let element_data = self.0.borrow();
         Ref::map(element_data, |element| &element.class)
     }
@@ -110,7 +110,7 @@ impl Element {
     }
 
     /// Returns the [UUID] of the element.
-    pub fn get_id(&self) -> Ref<UUID> {
+    pub fn get_id(&'_ self) -> Ref<'_, UUID> {
         let element_data = self.0.borrow();
         Ref::map(element_data, |element: &ElementData| &element.id)
     }
@@ -122,7 +122,7 @@ impl Element {
     }
 
     /// Returns the attribute with the given name. If the attribute does not exist, returns None.
-    pub fn get_attribute(&self, name: impl AsRef<str>) -> Option<Ref<Attribute>> {
+    pub fn get_attribute(&'_ self, name: impl AsRef<str>) -> Option<Ref<'_, Attribute>> {
         let element_data = self.0.borrow();
         let attribute_name = name.as_ref();
         Ref::filter_map(element_data, |element| element.attributes.get(attribute_name)).ok()
@@ -148,7 +148,7 @@ impl Element {
     }
 
     /// Returns the value of the attribute with the given name. If the attribute does not exist or is not the same type, returns None.
-    pub fn get_value<V>(&self, name: impl AsRef<str>) -> Option<Ref<V>>
+    pub fn get_value<V>(&'_ self, name: impl AsRef<str>) -> Option<Ref<'_, V>>
     where
         for<'a> &'a V: TryFrom<&'a Attribute>,
     {
@@ -184,7 +184,7 @@ impl Element {
     }
 
     /// Returns the attributes of the element.
-    pub fn get_attributes(&self) -> Ref<IndexMap<String, Attribute>> {
+    pub fn get_attributes(&'_ self) -> Ref<'_, IndexMap<String, Attribute>> {
         let element_data = self.0.borrow();
         Ref::map(element_data, |element| &element.attributes)
     }
