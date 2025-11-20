@@ -640,6 +640,21 @@ impl<T: BufRead> StringReader<T> {
                         string_token.push(',');
                     }
                 }
+                Some('<') => {
+                    if let Some(ReadToken::String(ref mut string_token)) = token {
+                        string_token.push('<');
+                        continue;
+                    }
+
+                    self.current_line = match self.next_line()? {
+                        Some(line) => line,
+                        None => return Ok(None),
+                    };
+                    self.line += 1;
+                    self.column = 0;
+                    line_characters = self.current_line.chars().peekable();
+                    continue;
+                }
                 Some(character) => {
                     if let Some(ReadToken::String(ref mut string_token)) = token {
                         if character == '\\' {
