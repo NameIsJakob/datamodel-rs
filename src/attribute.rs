@@ -1,7 +1,7 @@
 //! The supported types that data model uses.
 
-use chrono::Duration;
-use uuid::Uuid as UUID;
+pub use chrono::Duration;
+pub use uuid::Uuid as UUID;
 
 use crate::Element;
 
