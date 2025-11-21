@@ -174,6 +174,12 @@ pub trait Serializer {
     fn name() -> &'static str;
     /// Returns the current version of the serializer.
     fn version() -> i32;
-    fn serialize(buffer: &mut impl Write, header: &Header, root: &Element) -> Result<(), Self::Error>;
+    /// Serialize element tree to a buffer with the a specified version of the serializer.
+    fn serialize_version(buffer: &mut impl Write, header: &Header, root: &Element, version: i32) -> Result<(), Self::Error>;
+    /// Serialize element tree to a buffer with the current version of the serializer.
+    fn serialize(buffer: &mut impl Write, header: &Header, root: &Element) -> Result<(), Self::Error> {
+        Self::serialize_version(buffer, header, root, Self::version())
+    }
+    /// Un-serialize element tree from a buffer.
     fn deserialize(buffer: &mut impl BufRead, encoding: String, version: i32) -> Result<Element, Self::Error>;
 }

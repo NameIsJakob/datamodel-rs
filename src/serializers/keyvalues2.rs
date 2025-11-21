@@ -1244,9 +1244,13 @@ impl Serializer for KeyValues2Serializer {
         1
     }
 
-    fn serialize(buffer: &mut impl Write, header: &Header, root: &Element) -> Result<(), Self::Error> {
+    fn serialize_version(buffer: &mut impl Write, header: &Header, root: &Element, version: i32) -> Result<(), Self::Error> {
+        if version < 1 || version > Self::version() {
+            return Err(Keyvalues2SerializationError::InvalidEncodingVersion);
+        }
+
         let mut writer = StringWriter::new(buffer);
-        writer.write_header(&header.create_header(Self::name(), Self::version()))?;
+        writer.write_header(&header.create_header(Self::name(), version))?;
 
         fn collect_elements(root: Element, elements: &mut IndexMap<Element, usize>) {
             elements.insert(root.clone(), if elements.is_empty() { 1 } else { 0 });
@@ -1372,9 +1376,13 @@ impl Serializer for KeyValues2FlatSerializer {
         1
     }
 
-    fn serialize(buffer: &mut impl Write, header: &Header, root: &Element) -> Result<(), Self::Error> {
+    fn serialize_version(buffer: &mut impl Write, header: &Header, root: &Element, version: i32) -> Result<(), Self::Error> {
+        if version < 1 || version > Self::version() {
+            return Err(Keyvalues2SerializationError::InvalidEncodingVersion);
+        }
+
         let mut writer = StringWriter::new(buffer);
-        writer.write_header(&header.create_header(Self::name(), Self::version()))?;
+        writer.write_header(&header.create_header(Self::name(), version))?;
 
         fn collect_elements(root: Element, elements: &mut IndexMap<Element, usize>) {
             elements.insert(root.clone(), 1);

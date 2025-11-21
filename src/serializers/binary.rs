@@ -13,7 +13,22 @@ use crate::{
     attribute::{Angle, Attribute, BinaryBlock, Color, Matrix, Quaternion, Vector2, Vector3, Vector4},
 };
 
+const MAX_SHORT_ARRAY_LENGTH: usize = (i16::MAX as usize) + 1;
 const MAX_ARRAY_LENGTH: usize = (i32::MAX as usize) + 1;
+
+/// Version uses a table for strings.
+pub const VERSION_HAS_SYMBOL_TABLE: i32 = 2;
+/// Version deprecates attribute object id and replaced with time attribute.
+pub const VERSION_DEPRECATES_OBJECT_ID: i32 = 3;
+/// Version that the symbol table size uses an int, element names use the symbol table, string attributes uses the symbol table.
+pub const VERSION_GLOBAL_SYMBOL_TABLE: i32 = 4;
+/// Version that the symbol table indexes uses int.
+pub const VERSION_LARGE_SYMBOL_TABLE: i32 = 5;
+
+/// Specifics that the element is null.
+const ELEMENT_INDEX_NULL: i32 = -1;
+/// Specifics that the element was not serialized but element id was.
+const ELEMENT_INDEX_EXTERNAL: i32 = -2;
 
 #[derive(Debug, ThisError)]
 pub enum BinarySerializationError {
@@ -21,8 +36,10 @@ pub enum BinarySerializationError {
     IoError(#[from] Error),
     #[error("Can't Serialize Deprecated Attribute Type For Attribute \"{}\" In Element \"{}\"", .attribute, .element.get_id())]
     DeprecatedAttribute { attribute: String, element: Element },
-    #[error("Too Many Symbols To Serialize To Table, Symbol Count {} - Max {}", .count, MAX_ARRAY_LENGTH)]
-    TooManySymbols { count: usize },
+    #[error("Can't Serialize Attribute Type For Attribute \"{}\" In Element \"{}\" As Version {} Doesn't Support It", .attribute, .element.get_id(), .version)]
+    InvalidVersionForAttribute { attribute: String, element: Element, version: i32 },
+    #[error("Too Many Symbols To Serialize To Table, Symbol Count {} - Max {}", .count, .max)]
+    TooManySymbols { count: usize, max: usize },
     #[error("Too Many Elements To Serialize To Table, Element Count {} - Max {}", .count, MAX_ARRAY_LENGTH)]
     TooManyElements { count: usize },
     #[error("Element Has Too Many Attributes To Serialize In Element \"{}\", Attribute Count {} - Max {}", .element.get_id(), .count, MAX_ARRAY_LENGTH)]
@@ -69,23 +86,33 @@ impl Serializer for BinarySerializer {
         5
     }
 
-    fn serialize(buffer: &mut impl Write, header: &Header, root: &Element) -> Result<(), Self::Error> {
-        let mut writer = Writer::new(buffer);
+    fn serialize_version(buffer: &mut impl Write, header: &Header, root: &Element, version: i32) -> Result<(), Self::Error> {
+        if version < 0 || version > Self::version() {
+            return Err(BinarySerializationError::InvalidVersion { version });
+        }
 
-        writer.write_string(&header.create_header(Self::name(), Self::version()))?;
+        let mut writer = Writer::new(buffer);
+        writer.write_string(&header.create_header(Self::name(), version))?;
 
         let mut collected_elements = IndexSet::new();
         let mut collected_symbols = IndexSet::new();
         let mut element_collection_stack = Vec::new();
+
         if collected_elements.insert(Element::clone(root)) {
             element_collection_stack.push(Element::clone(root));
         }
         while let Some(current_check_element) = element_collection_stack.pop() {
-            collected_symbols.insert(current_check_element.get_class().clone());
-            collected_symbols.insert(current_check_element.get_name().clone());
+            if version >= VERSION_HAS_SYMBOL_TABLE {
+                collected_symbols.insert(current_check_element.get_class().clone());
+                if version >= VERSION_GLOBAL_SYMBOL_TABLE {
+                    collected_symbols.insert(current_check_element.get_name().clone());
+                }
+            }
 
             for (attribute_name, attribute_value) in current_check_element.get_attributes().iter() {
-                collected_symbols.insert(attribute_name.clone());
+                if version >= VERSION_HAS_SYMBOL_TABLE {
+                    collected_symbols.insert(attribute_name.clone());
+                }
 
                 match attribute_value {
                     Attribute::Element(value) => {
@@ -96,7 +123,9 @@ impl Serializer for BinarySerializer {
                         }
                     }
                     Attribute::String(value) => {
-                        collected_symbols.insert(value.clone());
+                        if version >= VERSION_GLOBAL_SYMBOL_TABLE {
+                            collected_symbols.insert(value.clone());
+                        }
                     }
                     #[allow(deprecated)]
                     Attribute::ObjectId(_) => {
@@ -104,6 +133,15 @@ impl Serializer for BinarySerializer {
                             attribute: attribute_name.clone(),
                             element: Element::clone(&current_check_element),
                         });
+                    }
+                    Attribute::Time(_) => {
+                        if version < VERSION_DEPRECATES_OBJECT_ID {
+                            return Err(BinarySerializationError::InvalidVersionForAttribute {
+                                attribute: attribute_name.clone(),
+                                element: Element::clone(&current_check_element),
+                                version,
+                            });
+                        }
                     }
                     Attribute::ElementArray(values) => {
                         for element in values.iter().flatten() {
@@ -119,14 +157,29 @@ impl Serializer for BinarySerializer {
                             element: Element::clone(&current_check_element),
                         });
                     }
+                    Attribute::TimeArray(_) => {
+                        if version < VERSION_DEPRECATES_OBJECT_ID {
+                            return Err(BinarySerializationError::InvalidVersionForAttribute {
+                                attribute: attribute_name.clone(),
+                                element: Element::clone(&current_check_element),
+                                version,
+                            });
+                        }
+                    }
                     _ => {}
                 }
             }
         }
 
-        if collected_symbols.len() > MAX_ARRAY_LENGTH {
+        let max_symbol_table_length = if version >= VERSION_GLOBAL_SYMBOL_TABLE {
+            MAX_ARRAY_LENGTH
+        } else {
+            MAX_SHORT_ARRAY_LENGTH
+        };
+        if collected_symbols.len() > max_symbol_table_length {
             return Err(BinarySerializationError::TooManySymbols {
                 count: collected_symbols.len(),
+                max: max_symbol_table_length,
             });
         }
 
@@ -136,15 +189,39 @@ impl Serializer for BinarySerializer {
             });
         }
 
-        writer.write_integer(collected_symbols.len() as i32)?;
+        if version >= VERSION_HAS_SYMBOL_TABLE {
+            if version >= VERSION_GLOBAL_SYMBOL_TABLE {
+                writer.write_integer(collected_symbols.len() as i32)?;
+            } else {
+                writer.write_short(collected_symbols.len() as i16)?;
+            }
+        }
         for symbol in &collected_symbols {
             writer.write_string(symbol)?;
         }
 
         writer.write_integer(collected_elements.len() as i32)?;
         for collected_element in &collected_elements {
-            writer.write_integer(collected_symbols.get_index_of(collected_element.get_class().as_str()).unwrap() as i32)?;
-            writer.write_integer(collected_symbols.get_index_of(collected_element.get_name().as_str()).unwrap() as i32)?;
+            if version >= VERSION_HAS_SYMBOL_TABLE {
+                if version >= VERSION_LARGE_SYMBOL_TABLE {
+                    writer.write_integer(collected_symbols.get_index_of(collected_element.get_class().as_str()).unwrap() as i32)?;
+                } else {
+                    writer.write_short(collected_symbols.get_index_of(collected_element.get_class().as_str()).unwrap() as i16)?;
+                }
+            } else {
+                writer.write_string(collected_element.get_class().as_str())?;
+            }
+
+            if version >= VERSION_GLOBAL_SYMBOL_TABLE {
+                if version >= VERSION_LARGE_SYMBOL_TABLE {
+                    writer.write_integer(collected_symbols.get_index_of(collected_element.get_name().as_str()).unwrap() as i32)?;
+                } else {
+                    writer.write_short(collected_symbols.get_index_of(collected_element.get_name().as_str()).unwrap() as i16)?;
+                }
+            } else {
+                writer.write_string(collected_element.get_name().as_str())?;
+            }
+
             writer.write_uuid(*collected_element.get_id())?;
         }
 
@@ -159,7 +236,15 @@ impl Serializer for BinarySerializer {
             writer.write_integer(collected_element_attributes.len() as i32)?;
 
             for (attribute_name, attribute_value) in collected_element_attributes.iter() {
-                writer.write_integer(collected_symbols.get_index_of(attribute_name.as_str()).unwrap() as i32)?;
+                if version >= VERSION_HAS_SYMBOL_TABLE {
+                    if version >= VERSION_LARGE_SYMBOL_TABLE {
+                        writer.write_integer(collected_symbols.get_index_of(attribute_name).unwrap() as i32)?;
+                    } else {
+                        writer.write_short(collected_symbols.get_index_of(attribute_name).unwrap() as i16)?;
+                    }
+                } else {
+                    writer.write_string(attribute_name.as_str())?;
+                }
 
                 macro_rules! check_array_length {
                     ($values:expr) => {
@@ -199,7 +284,15 @@ impl Serializer for BinarySerializer {
                     }
                     Attribute::String(value) => {
                         writer.write_byte(5)?;
-                        writer.write_integer(collected_symbols.get_index_of(value.as_str()).unwrap() as i32)?;
+                        if version >= VERSION_GLOBAL_SYMBOL_TABLE {
+                            if version >= VERSION_LARGE_SYMBOL_TABLE {
+                                writer.write_integer(collected_symbols.get_index_of(value).unwrap() as i32)?;
+                            } else {
+                                writer.write_short(collected_symbols.get_index_of(value).unwrap() as i16)?;
+                            }
+                        } else {
+                            writer.write_string(value)?;
+                        }
                     }
                     Attribute::Binary(value) => {
                         writer.write_byte(6)?;
@@ -454,8 +547,12 @@ impl Serializer for BinarySerializer {
         let mut reader = Reader::new(buffer);
         reader.read_string()?;
 
-        let symbol_table_length = if version >= 2 {
-            if version >= 4 { reader.read_integer()? } else { reader.read_short()? as i32 }
+        let symbol_table_length = if version >= VERSION_HAS_SYMBOL_TABLE {
+            if version >= VERSION_GLOBAL_SYMBOL_TABLE {
+                reader.read_integer()?
+            } else {
+                reader.read_short()? as i32
+            }
         } else {
             0
         };
@@ -469,8 +566,8 @@ impl Serializer for BinarySerializer {
 
         macro_rules! get_string_from_table {
             () => {
-                if version >= 2 {
-                    let string_index = if version >= 5 {
+                if version >= VERSION_HAS_SYMBOL_TABLE {
+                    let string_index = if version >= VERSION_LARGE_SYMBOL_TABLE {
                         reader.read_integer()?
                     } else {
                         reader.read_short()? as i32
@@ -498,7 +595,11 @@ impl Serializer for BinarySerializer {
         let mut element_table = Vec::with_capacity(element_table_length as usize);
         for _ in 0..element_table_length {
             let element_class = get_string_from_table!();
-            let element_name = if version >= 4 { get_string_from_table!() } else { reader.read_string()? };
+            let element_name = if version >= VERSION_GLOBAL_SYMBOL_TABLE {
+                get_string_from_table!()
+            } else {
+                reader.read_string()?
+            };
             let element_id = reader.read_uuid()?;
 
             element_table.push(Element::full(element_name, element_class, element_id));
@@ -535,14 +636,14 @@ impl Serializer for BinarySerializer {
                 let attribute_type = reader.read_byte()?;
                 let attribute_value = match attribute_type {
                     1 => Attribute::Element(match reader.read_integer()? {
-                        index if index < -2 || index > element_table_length => {
+                        index if index < ELEMENT_INDEX_EXTERNAL || index > element_table_length => {
                             return Err(BinarySerializationError::InvalidElementTableIndex {
                                 index,
                                 length: element_table_length,
                             });
                         }
-                        -1 => None,
-                        -2 => Some(Element::full(
+                        ELEMENT_INDEX_NULL => None,
+                        ELEMENT_INDEX_EXTERNAL => Some(Element::full(
                             Element::DEFAULT_ELEMENT_NAME,
                             Element::DEFAULT_ELEMENT_CLASS,
                             UUID::from_str(&reader.read_string()?)?,
@@ -552,7 +653,11 @@ impl Serializer for BinarySerializer {
                     2 => Attribute::Integer(reader.read_integer()?),
                     3 => Attribute::Float(reader.read_float()?),
                     4 => Attribute::Boolean(reader.read_unsigned_byte()? != 0),
-                    5 => Attribute::String(if version >= 4 { get_string_from_table!() } else { reader.read_string()? }),
+                    5 => Attribute::String(if version >= VERSION_GLOBAL_SYMBOL_TABLE {
+                        get_string_from_table!()
+                    } else {
+                        reader.read_string()?
+                    }),
                     6 => {
                         let binary_data_length = reader.read_integer()?;
                         if binary_data_length > 0 {
@@ -564,12 +669,12 @@ impl Serializer for BinarySerializer {
                         }
                         Attribute::Binary(BinaryBlock(binary_data))
                     }
-                    attribute_type if attribute_type == 7 && version < 3 =>
+                    attribute_type if attribute_type == 7 && version < VERSION_DEPRECATES_OBJECT_ID =>
                     {
                         #[allow(deprecated)]
                         Attribute::ObjectId(reader.read_uuid()?)
                     }
-                    attribute_type if attribute_type == 7 && version >= 3 => {
+                    attribute_type if attribute_type == 7 && version >= VERSION_DEPRECATES_OBJECT_ID => {
                         Attribute::Time(Duration::nanoseconds(((reader.read_integer()? as f64 / 10_000.0) * 1_000_000_000.0) as i64))
                     }
                     8 => Attribute::Color(Color {
@@ -612,14 +717,14 @@ impl Serializer for BinarySerializer {
                     ])),
                     15 => Attribute::ElementArray(read_attribute_array!({
                         match reader.read_integer()? {
-                            index if index < -2 || index > element_table_length => {
+                            index if index < ELEMENT_INDEX_EXTERNAL || index > element_table_length => {
                                 return Err(BinarySerializationError::InvalidElementTableIndex {
                                     index,
                                     length: element_table_length,
                                 });
                             }
-                            -1 => None,
-                            -2 => Some(Element::full(
+                            ELEMENT_INDEX_NULL => None,
+                            ELEMENT_INDEX_EXTERNAL => Some(Element::full(
                                 Element::DEFAULT_ELEMENT_NAME,
                                 Element::DEFAULT_ELEMENT_CLASS,
                                 UUID::from_str(&reader.read_string()?)?,
@@ -642,12 +747,12 @@ impl Serializer for BinarySerializer {
                         }
                         BinaryBlock(binary_data)
                     })),
-                    attribute_type if attribute_type == 21 && version < 3 =>
+                    attribute_type if attribute_type == 21 && version < VERSION_DEPRECATES_OBJECT_ID =>
                     {
                         #[allow(deprecated)]
                         Attribute::ObjectIdArray(read_attribute_array!({ reader.read_uuid()? }))
                     }
-                    attribute_type if attribute_type == 21 && version >= 3 => Attribute::TimeArray(read_attribute_array!({
+                    attribute_type if attribute_type == 21 && version >= VERSION_DEPRECATES_OBJECT_ID => Attribute::TimeArray(read_attribute_array!({
                         Duration::nanoseconds(((reader.read_integer()? as f64 / 10_000.0) * 1_000_000_000.0) as i64)
                     })),
                     22 => Attribute::ColorArray(read_attribute_array!({
@@ -738,6 +843,11 @@ impl<T: Write> Writer<T> {
     }
 
     fn write_unsigned_byte(&mut self, value: u8) -> Result<(), BinarySerializationError> {
+        self.buffer.write_all(&value.to_le_bytes())?;
+        Ok(())
+    }
+
+    fn write_short(&mut self, value: i16) -> Result<(), BinarySerializationError> {
         self.buffer.write_all(&value.to_le_bytes())?;
         Ok(())
     }
