@@ -1,6 +1,6 @@
 [package]
 name = "datamodel"
-version = "0.7.0"
+version = "0.7.1"
 edition = "2024"
 authors = ["NameIsJakob"]
 description = "A rust library to serialize and deserialize Valve's proprietary DMX file format."
