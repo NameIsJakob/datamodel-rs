@@ -8,7 +8,7 @@ use thiserror::Error as ThisError;
 
 use crate::{
     Element,
-    serializers::{BinarySerializationError, BinarySerializer, KeyValues2FlatSerializer, KeyValues2Serializer, Keyvalues2SerializationError},
+    serializers::{BinarySerializationError, BinarySerializer, KeyValues2FlatSerializer, KeyValues2SerializationError, KeyValues2Serializer},
 };
 
 #[derive(Debug, ThisError)]
@@ -151,7 +151,7 @@ pub enum SerializationError {
     #[error("Binary Serialization Error: {0}")]
     Binary(#[from] BinarySerializationError),
     #[error("KeyValues2 Serialization Error: {0}")]
-    KeyValues2(#[from] Keyvalues2SerializationError),
+    KeyValues2(#[from] KeyValues2SerializationError),
 }
 
 /// Deserialize a buffer with built-in serializers.

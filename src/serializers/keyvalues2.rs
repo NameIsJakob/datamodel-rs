@@ -11,7 +11,7 @@ use crate::{
 };
 
 #[derive(Debug, ThisError)]
-pub enum Keyvalues2SerializationError {
+pub enum KeyValues2SerializationError {
     #[error("IO Error: {0}")]
     Io(#[from] IOError),
     #[error("Can't Serialize Deprecated Attribute")]
@@ -74,12 +74,12 @@ impl<T: Write> StringWriter<T> {
         Self { buffer, tab_index: 0 }
     }
 
-    fn write_header(&mut self, line: &str) -> Result<(), Keyvalues2SerializationError> {
+    fn write_header(&mut self, line: &str) -> Result<(), KeyValues2SerializationError> {
         self.buffer.write_all(line.as_bytes())?;
         Ok(())
     }
 
-    fn write_tabs(&mut self) -> Result<(), Keyvalues2SerializationError> {
+    fn write_tabs(&mut self) -> Result<(), KeyValues2SerializationError> {
         if self.tab_index == 0 {
             return Ok(());
         }
@@ -87,42 +87,42 @@ impl<T: Write> StringWriter<T> {
         Ok(())
     }
 
-    fn write_line(&mut self, line: &str) -> Result<(), Keyvalues2SerializationError> {
+    fn write_line(&mut self, line: &str) -> Result<(), KeyValues2SerializationError> {
         self.write_tabs()?;
         self.buffer.write_all(line.as_bytes())?;
         self.buffer.write_all(b"\r\n")?;
         Ok(())
     }
 
-    fn write_open_brace(&mut self) -> Result<(), Keyvalues2SerializationError> {
+    fn write_open_brace(&mut self) -> Result<(), KeyValues2SerializationError> {
         self.write_tabs()?;
         self.buffer.write_all(b"{\r\n")?;
         self.tab_index += 1;
         Ok(())
     }
 
-    fn write_close_brace(&mut self) -> Result<(), Keyvalues2SerializationError> {
+    fn write_close_brace(&mut self) -> Result<(), KeyValues2SerializationError> {
         self.tab_index -= 1;
         self.write_tabs()?;
         self.buffer.write_all(b"}\r\n")?;
         Ok(())
     }
 
-    fn write_open_bracket(&mut self) -> Result<(), Keyvalues2SerializationError> {
+    fn write_open_bracket(&mut self) -> Result<(), KeyValues2SerializationError> {
         self.write_tabs()?;
         self.buffer.write_all(b"[\r\n")?;
         self.tab_index += 1;
         Ok(())
     }
 
-    fn write_close_bracket(&mut self) -> Result<(), Keyvalues2SerializationError> {
+    fn write_close_bracket(&mut self) -> Result<(), KeyValues2SerializationError> {
         self.tab_index -= 1;
         self.write_tabs()?;
         self.buffer.write_all(b"]\r\n")?;
         Ok(())
     }
 
-    fn write_attributes(&mut self, root: &Element, collected_elements: &IndexMap<Element, usize>) -> Result<(), Keyvalues2SerializationError> {
+    fn write_attributes(&mut self, root: &Element, collected_elements: &IndexMap<Element, usize>) -> Result<(), KeyValues2SerializationError> {
         macro_rules! write_attribute_string {
             ($self:ident, $attribute_name:expr, $attribute_type:expr, $attribute_value:expr) => {
                 self.write_line(&format!(
@@ -450,7 +450,7 @@ impl<T: Write> StringWriter<T> {
                     }
                     self.write_close_bracket()?;
                 }
-                _ => return Err(Keyvalues2SerializationError::DeprecatedAttribute),
+                _ => return Err(KeyValues2SerializationError::DeprecatedAttribute),
             }
         }
         Ok(())
@@ -555,7 +555,7 @@ impl<T: BufRead> StringReader<T> {
         }
     }
 
-    fn next_token(&mut self) -> Result<Option<ReadToken>, Keyvalues2SerializationError> {
+    fn next_token(&mut self) -> Result<Option<ReadToken>, KeyValues2SerializationError> {
         if self.current_line.len() == self.column {
             self.current_line = match self.next_line()? {
                 Some(line) => line,
@@ -590,7 +590,7 @@ impl<T: BufRead> StringReader<T> {
                         continue;
                     }
 
-                    return Err(Keyvalues2SerializationError::UnknownToken('/', self.line, self.column));
+                    return Err(KeyValues2SerializationError::UnknownToken('/', self.line, self.column));
                 }
                 Some('"') => {
                     if matches!(token, Some(ReadToken::String(_))) {
@@ -694,11 +694,11 @@ impl<T: BufRead> StringReader<T> {
                                 }
                                 Some(escape_character) => {
                                     if escape_character.is_whitespace() {
-                                        return Err(Keyvalues2SerializationError::UnfinishedEscapeCharacter(self.line, self.column));
+                                        return Err(KeyValues2SerializationError::UnfinishedEscapeCharacter(self.line, self.column));
                                     }
-                                    return Err(Keyvalues2SerializationError::UnknownEscapeCharacter(escape_character, self.line, self.column));
+                                    return Err(KeyValues2SerializationError::UnknownEscapeCharacter(escape_character, self.line, self.column));
                                 }
-                                None => return Err(Keyvalues2SerializationError::UnfinishedEscapeCharacter(self.line, self.column)),
+                                None => return Err(KeyValues2SerializationError::UnfinishedEscapeCharacter(self.line, self.column)),
                             }
                             self.column += 1;
                             continue;
@@ -712,14 +712,14 @@ impl<T: BufRead> StringReader<T> {
                         continue;
                     }
 
-                    return Err(Keyvalues2SerializationError::UnknownToken(character, self.line, self.column));
+                    return Err(KeyValues2SerializationError::UnknownToken(character, self.line, self.column));
                 }
                 None => {
                     self.current_line = match self.next_line()? {
                         Some(line) => line,
                         None => {
                             if let Some(ReadToken::String(_)) = token {
-                                return Err(Keyvalues2SerializationError::UnfinishedQuoteString(self.line, self.column));
+                                return Err(KeyValues2SerializationError::UnfinishedQuoteString(self.line, self.column));
                             }
                             return Ok(None);
                         }
@@ -734,7 +734,7 @@ impl<T: BufRead> StringReader<T> {
         Ok(token)
     }
 
-    fn next_line(&mut self) -> Result<Option<String>, Keyvalues2SerializationError> {
+    fn next_line(&mut self) -> Result<Option<String>, KeyValues2SerializationError> {
         let mut line = String::new();
         let byte_count = self.buffer.read_line(&mut line)?;
         if byte_count == 0 {
@@ -747,23 +747,23 @@ impl<T: BufRead> StringReader<T> {
         &mut self,
         collected_elements: &mut IndexMap<UUID, Element>,
         element_remap: &mut IndexMap<Element, Vec<(String, ElementAttributeRemap)>>,
-    ) -> Result<Option<Element>, Keyvalues2SerializationError> {
+    ) -> Result<Option<Element>, KeyValues2SerializationError> {
         let element_class = match self.next_token()? {
             Some(ReadToken::String(string_token)) => string_token,
-            Some(ReadToken::OpenBrace) => return Err(Keyvalues2SerializationError::UnexpectedOpenBrace(self.line, self.column)),
-            Some(ReadToken::CloseBrace) => return Err(Keyvalues2SerializationError::UnexpectedCloseBrace(self.line, self.column)),
-            Some(ReadToken::OpenBracket) => return Err(Keyvalues2SerializationError::UnexpectedOpenBracket(self.line, self.column)),
-            Some(ReadToken::CloseBracket) => return Err(Keyvalues2SerializationError::UnexpectedCloseBracket(self.line, self.column)),
+            Some(ReadToken::OpenBrace) => return Err(KeyValues2SerializationError::UnexpectedOpenBrace(self.line, self.column)),
+            Some(ReadToken::CloseBrace) => return Err(KeyValues2SerializationError::UnexpectedCloseBrace(self.line, self.column)),
+            Some(ReadToken::OpenBracket) => return Err(KeyValues2SerializationError::UnexpectedOpenBracket(self.line, self.column)),
+            Some(ReadToken::CloseBracket) => return Err(KeyValues2SerializationError::UnexpectedCloseBracket(self.line, self.column)),
             None => return Ok(None),
         };
 
         let mut element = Element::create(String::new(), element_class);
         if collected_elements.insert(*element.get_id(), Element::clone(&element)).is_some() {
-            return Err(Keyvalues2SerializationError::DuplicateGeneratedElementId);
+            return Err(KeyValues2SerializationError::DuplicateGeneratedElementId);
         }
 
         if !matches!(self.next_token()?, Some(ReadToken::OpenBrace)) {
-            return Err(Keyvalues2SerializationError::ExpectedOpenBrace(self.line, self.column));
+            return Err(KeyValues2SerializationError::ExpectedOpenBrace(self.line, self.column));
         }
 
         self.read_attributes(&mut element, collected_elements, element_remap)?;
@@ -776,42 +776,42 @@ impl<T: BufRead> StringReader<T> {
         element: &mut Element,
         collected_elements: &mut IndexMap<UUID, Element>,
         element_remap: &mut IndexMap<Element, Vec<(String, ElementAttributeRemap)>>,
-    ) -> Result<(), Keyvalues2SerializationError> {
+    ) -> Result<(), KeyValues2SerializationError> {
         loop {
-            let attribute_name = match self.next_token()?.ok_or(Keyvalues2SerializationError::UnexpectedEndOfFile)? {
+            let attribute_name = match self.next_token()?.ok_or(KeyValues2SerializationError::UnexpectedEndOfFile)? {
                 ReadToken::String(string_token) => string_token,
-                ReadToken::OpenBrace => return Err(Keyvalues2SerializationError::UnexpectedOpenBrace(self.line, self.column)),
+                ReadToken::OpenBrace => return Err(KeyValues2SerializationError::UnexpectedOpenBrace(self.line, self.column)),
                 ReadToken::CloseBrace => return Ok(()),
-                ReadToken::OpenBracket => return Err(Keyvalues2SerializationError::UnexpectedOpenBracket(self.line, self.column)),
-                ReadToken::CloseBracket => return Err(Keyvalues2SerializationError::UnexpectedCloseBracket(self.line, self.column)),
+                ReadToken::OpenBracket => return Err(KeyValues2SerializationError::UnexpectedOpenBracket(self.line, self.column)),
+                ReadToken::CloseBracket => return Err(KeyValues2SerializationError::UnexpectedCloseBracket(self.line, self.column)),
             };
 
-            let attribute_type = match self.next_token()?.ok_or(Keyvalues2SerializationError::UnexpectedEndOfFile)? {
+            let attribute_type = match self.next_token()?.ok_or(KeyValues2SerializationError::UnexpectedEndOfFile)? {
                 ReadToken::String(string_token) => string_token,
-                ReadToken::OpenBrace => return Err(Keyvalues2SerializationError::UnexpectedOpenBrace(self.line, self.column)),
-                ReadToken::CloseBrace => return Err(Keyvalues2SerializationError::UnexpectedCloseBrace(self.line, self.column)),
-                ReadToken::OpenBracket => return Err(Keyvalues2SerializationError::UnexpectedOpenBracket(self.line, self.column)),
-                ReadToken::CloseBracket => return Err(Keyvalues2SerializationError::UnexpectedCloseBracket(self.line, self.column)),
+                ReadToken::OpenBrace => return Err(KeyValues2SerializationError::UnexpectedOpenBrace(self.line, self.column)),
+                ReadToken::CloseBrace => return Err(KeyValues2SerializationError::UnexpectedCloseBrace(self.line, self.column)),
+                ReadToken::OpenBracket => return Err(KeyValues2SerializationError::UnexpectedOpenBracket(self.line, self.column)),
+                ReadToken::CloseBracket => return Err(KeyValues2SerializationError::UnexpectedCloseBracket(self.line, self.column)),
             };
 
             if attribute_name == "id" {
                 if attribute_type != "elementid" {
-                    return Err(Keyvalues2SerializationError::InvalidIdAttributeType(
+                    return Err(KeyValues2SerializationError::InvalidIdAttributeType(
                         self.line,
                         self.column.saturating_sub(attribute_type.len().saturating_sub(1)),
                     ));
                 }
 
-                let attribute_value = match self.next_token()?.ok_or(Keyvalues2SerializationError::UnexpectedEndOfFile)? {
+                let attribute_value = match self.next_token()?.ok_or(KeyValues2SerializationError::UnexpectedEndOfFile)? {
                     ReadToken::String(string_token) => string_token,
-                    ReadToken::OpenBrace => return Err(Keyvalues2SerializationError::UnexpectedOpenBrace(self.line, self.column)),
-                    ReadToken::CloseBrace => return Err(Keyvalues2SerializationError::UnexpectedCloseBrace(self.line, self.column)),
-                    ReadToken::OpenBracket => return Err(Keyvalues2SerializationError::UnexpectedOpenBracket(self.line, self.column)),
-                    ReadToken::CloseBracket => return Err(Keyvalues2SerializationError::UnexpectedCloseBracket(self.line, self.column)),
+                    ReadToken::OpenBrace => return Err(KeyValues2SerializationError::UnexpectedOpenBrace(self.line, self.column)),
+                    ReadToken::CloseBrace => return Err(KeyValues2SerializationError::UnexpectedCloseBrace(self.line, self.column)),
+                    ReadToken::OpenBracket => return Err(KeyValues2SerializationError::UnexpectedOpenBracket(self.line, self.column)),
+                    ReadToken::CloseBracket => return Err(KeyValues2SerializationError::UnexpectedCloseBracket(self.line, self.column)),
                 };
 
                 let element_id = attribute_value.parse::<UUID>().map_err(|_| {
-                    Keyvalues2SerializationError::ParseUUIDError(self.line, self.column.saturating_sub(attribute_value.len().saturating_sub(1)))
+                    KeyValues2SerializationError::ParseUUIDError(self.line, self.column.saturating_sub(attribute_value.len().saturating_sub(1)))
                 })?;
 
                 if element_id == *element.get_id() {
@@ -819,7 +819,7 @@ impl<T: BufRead> StringReader<T> {
                 }
 
                 if collected_elements.contains_key(&element_id) {
-                    return Err(Keyvalues2SerializationError::DuplicateElementId(element_id));
+                    return Err(KeyValues2SerializationError::DuplicateElementId(element_id));
                 }
 
                 collected_elements.shift_remove(&*element.get_id()).unwrap();
@@ -830,18 +830,18 @@ impl<T: BufRead> StringReader<T> {
 
             if attribute_name == "name" {
                 if attribute_type != "string" {
-                    return Err(Keyvalues2SerializationError::InvalidNameAttributeType(
+                    return Err(KeyValues2SerializationError::InvalidNameAttributeType(
                         self.line,
                         self.column.saturating_sub(attribute_type.len().saturating_sub(1)),
                     ));
                 }
 
-                let attribute_value = match self.next_token()?.ok_or(Keyvalues2SerializationError::UnexpectedEndOfFile)? {
+                let attribute_value = match self.next_token()?.ok_or(KeyValues2SerializationError::UnexpectedEndOfFile)? {
                     ReadToken::String(string_token) => string_token,
-                    ReadToken::OpenBrace => return Err(Keyvalues2SerializationError::UnexpectedOpenBrace(self.line, self.column)),
-                    ReadToken::CloseBrace => return Err(Keyvalues2SerializationError::UnexpectedCloseBrace(self.line, self.column)),
-                    ReadToken::OpenBracket => return Err(Keyvalues2SerializationError::UnexpectedOpenBracket(self.line, self.column)),
-                    ReadToken::CloseBracket => return Err(Keyvalues2SerializationError::UnexpectedCloseBracket(self.line, self.column)),
+                    ReadToken::OpenBrace => return Err(KeyValues2SerializationError::UnexpectedOpenBrace(self.line, self.column)),
+                    ReadToken::CloseBrace => return Err(KeyValues2SerializationError::UnexpectedCloseBrace(self.line, self.column)),
+                    ReadToken::OpenBracket => return Err(KeyValues2SerializationError::UnexpectedOpenBracket(self.line, self.column)),
+                    ReadToken::CloseBracket => return Err(KeyValues2SerializationError::UnexpectedCloseBracket(self.line, self.column)),
                 };
 
                 element.set_name(attribute_value);
@@ -859,12 +859,12 @@ impl<T: BufRead> StringReader<T> {
             }
 
             if attribute_type == "element" {
-                let attribute_value = match self.next_token()?.ok_or(Keyvalues2SerializationError::UnexpectedEndOfFile)? {
+                let attribute_value = match self.next_token()?.ok_or(KeyValues2SerializationError::UnexpectedEndOfFile)? {
                     ReadToken::String(string_token) => string_token,
-                    ReadToken::OpenBrace => return Err(Keyvalues2SerializationError::UnexpectedOpenBrace(self.line, self.column)),
-                    ReadToken::CloseBrace => return Err(Keyvalues2SerializationError::UnexpectedCloseBrace(self.line, self.column)),
-                    ReadToken::OpenBracket => return Err(Keyvalues2SerializationError::UnexpectedOpenBracket(self.line, self.column)),
-                    ReadToken::CloseBracket => return Err(Keyvalues2SerializationError::UnexpectedCloseBracket(self.line, self.column)),
+                    ReadToken::OpenBrace => return Err(KeyValues2SerializationError::UnexpectedOpenBrace(self.line, self.column)),
+                    ReadToken::CloseBrace => return Err(KeyValues2SerializationError::UnexpectedCloseBrace(self.line, self.column)),
+                    ReadToken::OpenBracket => return Err(KeyValues2SerializationError::UnexpectedOpenBracket(self.line, self.column)),
+                    ReadToken::CloseBracket => return Err(KeyValues2SerializationError::UnexpectedCloseBracket(self.line, self.column)),
                 };
 
                 if attribute_value.is_empty() {
@@ -873,7 +873,7 @@ impl<T: BufRead> StringReader<T> {
                 }
 
                 let element_id = attribute_value.parse::<UUID>().map_err(|_| {
-                    Keyvalues2SerializationError::ParseUUIDError(self.line, self.column.saturating_sub(attribute_value.len().saturating_sub(1)))
+                    KeyValues2SerializationError::ParseUUIDError(self.line, self.column.saturating_sub(attribute_value.len().saturating_sub(1)))
                 })?;
 
                 element_remap
@@ -887,25 +887,25 @@ impl<T: BufRead> StringReader<T> {
 
             if attribute_type == "element_array" {
                 if !matches!(self.next_token()?, Some(ReadToken::OpenBracket)) {
-                    return Err(Keyvalues2SerializationError::ExpectedOpenBracket(self.line, self.column));
+                    return Err(KeyValues2SerializationError::ExpectedOpenBracket(self.line, self.column));
                 }
 
                 let mut elements = Vec::new();
                 let mut remaps = Vec::new();
 
                 loop {
-                    let attribute_value = match self.next_token()?.ok_or(Keyvalues2SerializationError::UnexpectedEndOfFile)? {
+                    let attribute_value = match self.next_token()?.ok_or(KeyValues2SerializationError::UnexpectedEndOfFile)? {
                         ReadToken::String(string_token) => string_token,
-                        ReadToken::OpenBrace => return Err(Keyvalues2SerializationError::UnexpectedOpenBrace(self.line, self.column)),
-                        ReadToken::CloseBrace => return Err(Keyvalues2SerializationError::UnexpectedCloseBrace(self.line, self.column)),
-                        ReadToken::OpenBracket => return Err(Keyvalues2SerializationError::UnexpectedOpenBracket(self.line, self.column)),
+                        ReadToken::OpenBrace => return Err(KeyValues2SerializationError::UnexpectedOpenBrace(self.line, self.column)),
+                        ReadToken::CloseBrace => return Err(KeyValues2SerializationError::UnexpectedCloseBrace(self.line, self.column)),
+                        ReadToken::OpenBracket => return Err(KeyValues2SerializationError::UnexpectedOpenBracket(self.line, self.column)),
                         ReadToken::CloseBracket => break,
                     };
 
-                    match self.next_token()?.ok_or(Keyvalues2SerializationError::UnexpectedEndOfFile)? {
+                    match self.next_token()?.ok_or(KeyValues2SerializationError::UnexpectedEndOfFile)? {
                         ReadToken::String(string_token) => {
                             if attribute_value != "element" {
-                                return Err(Keyvalues2SerializationError::ExpectedOpenBrace(
+                                return Err(KeyValues2SerializationError::ExpectedOpenBrace(
                                     self.line,
                                     self.column.saturating_sub(attribute_value.len().saturating_sub(1)),
                                 ));
@@ -917,7 +917,7 @@ impl<T: BufRead> StringReader<T> {
                             }
 
                             let element_id = string_token.parse::<UUID>().map_err(|_| {
-                                Keyvalues2SerializationError::ParseUUIDError(self.line, self.column.saturating_sub(attribute_value.len().saturating_sub(1)))
+                                KeyValues2SerializationError::ParseUUIDError(self.line, self.column.saturating_sub(attribute_value.len().saturating_sub(1)))
                             })?;
 
                             remaps.push((elements.len(), element_id));
@@ -926,9 +926,9 @@ impl<T: BufRead> StringReader<T> {
                         ReadToken::OpenBrace => {
                             elements.push(Some(self.read_element_attribute(attribute_value, collected_elements, element_remap)?));
                         }
-                        ReadToken::CloseBrace => return Err(Keyvalues2SerializationError::UnexpectedCloseBrace(self.line, self.column)),
-                        ReadToken::OpenBracket => return Err(Keyvalues2SerializationError::UnexpectedOpenBracket(self.line, self.column)),
-                        ReadToken::CloseBracket => return Err(Keyvalues2SerializationError::UnexpectedCloseBracket(self.line, self.column)),
+                        ReadToken::CloseBrace => return Err(KeyValues2SerializationError::UnexpectedCloseBrace(self.line, self.column)),
+                        ReadToken::OpenBracket => return Err(KeyValues2SerializationError::UnexpectedOpenBracket(self.line, self.column)),
+                        ReadToken::CloseBracket => return Err(KeyValues2SerializationError::UnexpectedCloseBracket(self.line, self.column)),
                     };
                 }
 
@@ -944,7 +944,7 @@ impl<T: BufRead> StringReader<T> {
             }
 
             if !matches!(self.next_token()?, Some(ReadToken::OpenBrace)) {
-                return Err(Keyvalues2SerializationError::ExpectedOpenBrace(self.line, self.column));
+                return Err(KeyValues2SerializationError::ExpectedOpenBrace(self.line, self.column));
             }
 
             element.set_attribute(
@@ -954,11 +954,11 @@ impl<T: BufRead> StringReader<T> {
         }
     }
 
-    fn read_attribute_array(&mut self, attribute_type: &str) -> Result<Option<Attribute>, Keyvalues2SerializationError> {
+    fn read_attribute_array(&mut self, attribute_type: &str) -> Result<Option<Attribute>, KeyValues2SerializationError> {
         macro_rules! parse_array_attribute {
             ($self:ident, $match_variant:path, $single_type:expr, $result_variant:path) => {
                 if !matches!($self.next_token()?, Some(ReadToken::OpenBracket)) {
-                    return Err(Keyvalues2SerializationError::ExpectedOpenBracket($self.line, $self.column));
+                    return Err(KeyValues2SerializationError::ExpectedOpenBracket($self.line, $self.column));
                 } else {
                     let mut array = Vec::new();
                     #[allow(deprecated)]
@@ -1018,14 +1018,14 @@ impl<T: BufRead> StringReader<T> {
         })
     }
 
-    fn read_attribute_value(&mut self, attribute_type: &str) -> Result<Option<Attribute>, Keyvalues2SerializationError> {
+    fn read_attribute_value(&mut self, attribute_type: &str) -> Result<Option<Attribute>, KeyValues2SerializationError> {
         macro_rules! get_attribute_value {
             ($self:ident) => {
-                match self.next_token()?.ok_or(Keyvalues2SerializationError::UnexpectedEndOfFile)? {
+                match self.next_token()?.ok_or(KeyValues2SerializationError::UnexpectedEndOfFile)? {
                     ReadToken::String(string_token) => string_token,
-                    ReadToken::OpenBrace => return Err(Keyvalues2SerializationError::UnexpectedOpenBrace(self.line, self.column)),
-                    ReadToken::CloseBrace => return Err(Keyvalues2SerializationError::UnexpectedCloseBrace(self.line, self.column)),
-                    ReadToken::OpenBracket => return Err(Keyvalues2SerializationError::UnexpectedOpenBracket(self.line, self.column)),
+                    ReadToken::OpenBrace => return Err(KeyValues2SerializationError::UnexpectedOpenBrace(self.line, self.column)),
+                    ReadToken::CloseBrace => return Err(KeyValues2SerializationError::UnexpectedCloseBrace(self.line, self.column)),
+                    ReadToken::OpenBracket => return Err(KeyValues2SerializationError::UnexpectedOpenBracket(self.line, self.column)),
                     ReadToken::CloseBracket => return Ok(None),
                 }
             };
@@ -1040,7 +1040,7 @@ impl<T: BufRead> StringReader<T> {
             ($self:ident, $tokens:expr, $attribute_value:expr, $parse_error_variant:path) => {
                 $tokens
                     .next()
-                    .ok_or(Keyvalues2SerializationError::InvalidAttributeValue(
+                    .ok_or(KeyValues2SerializationError::InvalidAttributeValue(
                         self.line,
                         self.column.saturating_sub($attribute_value.len().saturating_sub(1)),
                     ))?
@@ -1056,7 +1056,7 @@ impl<T: BufRead> StringReader<T> {
                 Some(Attribute::Integer(parse_primitive!(
                     self,
                     attribute_value,
-                    Keyvalues2SerializationError::ParseIntegerError
+                    KeyValues2SerializationError::ParseIntegerError
                 )))
             }
             "float" => {
@@ -1064,14 +1064,14 @@ impl<T: BufRead> StringReader<T> {
                 Some(Attribute::Float(parse_primitive!(
                     self,
                     attribute_value,
-                    Keyvalues2SerializationError::ParseFloatError
+                    KeyValues2SerializationError::ParseFloatError
                 )))
             }
             "bool" => {
                 let attribute_value = get_attribute_value!(self);
                 Some(Attribute::Boolean(
                     attribute_value.parse::<u8>().map_err(|_| {
-                        Keyvalues2SerializationError::ParseBooleanError(self.line, self.column.saturating_sub(attribute_value.len().saturating_sub(1)))
+                        KeyValues2SerializationError::ParseBooleanError(self.line, self.column.saturating_sub(attribute_value.len().saturating_sub(1)))
                     })? != 0,
                 ))
             }
@@ -1086,7 +1086,7 @@ impl<T: BufRead> StringReader<T> {
                 for byte in attribute_value.chars().filter(|c| !c.is_whitespace()).collect::<Vec<char>>().chunks(2) {
                     let byte = byte.iter().collect::<String>();
                     block.0.push(u8::from_str_radix(&byte, 16).map_err(|_| {
-                        Keyvalues2SerializationError::ParseIntegerError(self.line, self.column.saturating_sub(attribute_value.len().saturating_sub(1)))
+                        KeyValues2SerializationError::ParseIntegerError(self.line, self.column.saturating_sub(attribute_value.len().saturating_sub(1)))
                     })?);
                 }
 
@@ -1095,7 +1095,7 @@ impl<T: BufRead> StringReader<T> {
             "elementid" => {
                 let attribute_value = get_attribute_value!(self);
                 let object_id = attribute_value.parse::<UUID>().map_err(|_| {
-                    Keyvalues2SerializationError::ParseUUIDError(self.line, self.column.saturating_sub(attribute_value.len().saturating_sub(1)))
+                    KeyValues2SerializationError::ParseUUIDError(self.line, self.column.saturating_sub(attribute_value.len().saturating_sub(1)))
                 })?;
 
                 #[allow(deprecated)]
@@ -1103,7 +1103,7 @@ impl<T: BufRead> StringReader<T> {
             }
             "time" => {
                 let attribute_value = get_attribute_value!(self);
-                let time: f64 = parse_primitive!(self, attribute_value, Keyvalues2SerializationError::ParseFloatError);
+                let time: f64 = parse_primitive!(self, attribute_value, KeyValues2SerializationError::ParseFloatError);
                 let nanoseconds = time * 1_000_000_000.0;
                 Some(Attribute::Time(Duration::nanoseconds(nanoseconds as i64)))
             }
@@ -1111,37 +1111,37 @@ impl<T: BufRead> StringReader<T> {
                 let attribute_value = get_attribute_value!(self);
                 let mut tokens = attribute_value.split_whitespace();
                 Some(Attribute::Color(Color {
-                    red: parse_primitive!(self, tokens, attribute_value, Keyvalues2SerializationError::ParseIntegerError),
-                    green: parse_primitive!(self, tokens, attribute_value, Keyvalues2SerializationError::ParseIntegerError),
-                    blue: parse_primitive!(self, tokens, attribute_value, Keyvalues2SerializationError::ParseIntegerError),
-                    alpha: parse_primitive!(self, tokens, attribute_value, Keyvalues2SerializationError::ParseIntegerError),
+                    red: parse_primitive!(self, tokens, attribute_value, KeyValues2SerializationError::ParseIntegerError),
+                    green: parse_primitive!(self, tokens, attribute_value, KeyValues2SerializationError::ParseIntegerError),
+                    blue: parse_primitive!(self, tokens, attribute_value, KeyValues2SerializationError::ParseIntegerError),
+                    alpha: parse_primitive!(self, tokens, attribute_value, KeyValues2SerializationError::ParseIntegerError),
                 }))
             }
             "vector2" => {
                 let attribute_value = get_attribute_value!(self);
                 let mut tokens = attribute_value.split_whitespace();
                 Some(Attribute::Vector2(Vector2 {
-                    x: parse_primitive!(self, tokens, attribute_value, Keyvalues2SerializationError::ParseFloatError),
-                    y: parse_primitive!(self, tokens, attribute_value, Keyvalues2SerializationError::ParseFloatError),
+                    x: parse_primitive!(self, tokens, attribute_value, KeyValues2SerializationError::ParseFloatError),
+                    y: parse_primitive!(self, tokens, attribute_value, KeyValues2SerializationError::ParseFloatError),
                 }))
             }
             "vector3" => {
                 let attribute_value = get_attribute_value!(self);
                 let mut tokens = attribute_value.split_whitespace();
                 Some(Attribute::Vector3(Vector3 {
-                    x: parse_primitive!(self, tokens, attribute_value, Keyvalues2SerializationError::ParseFloatError),
-                    y: parse_primitive!(self, tokens, attribute_value, Keyvalues2SerializationError::ParseFloatError),
-                    z: parse_primitive!(self, tokens, attribute_value, Keyvalues2SerializationError::ParseFloatError),
+                    x: parse_primitive!(self, tokens, attribute_value, KeyValues2SerializationError::ParseFloatError),
+                    y: parse_primitive!(self, tokens, attribute_value, KeyValues2SerializationError::ParseFloatError),
+                    z: parse_primitive!(self, tokens, attribute_value, KeyValues2SerializationError::ParseFloatError),
                 }))
             }
             "vector4" => {
                 let attribute_value = get_attribute_value!(self);
                 let mut tokens = attribute_value.split_whitespace();
                 Some(Attribute::Vector4(Vector4 {
-                    x: parse_primitive!(self, tokens, attribute_value, Keyvalues2SerializationError::ParseFloatError),
-                    y: parse_primitive!(self, tokens, attribute_value, Keyvalues2SerializationError::ParseFloatError),
-                    z: parse_primitive!(self, tokens, attribute_value, Keyvalues2SerializationError::ParseFloatError),
-                    w: parse_primitive!(self, tokens, attribute_value, Keyvalues2SerializationError::ParseFloatError),
+                    x: parse_primitive!(self, tokens, attribute_value, KeyValues2SerializationError::ParseFloatError),
+                    y: parse_primitive!(self, tokens, attribute_value, KeyValues2SerializationError::ParseFloatError),
+                    z: parse_primitive!(self, tokens, attribute_value, KeyValues2SerializationError::ParseFloatError),
+                    w: parse_primitive!(self, tokens, attribute_value, KeyValues2SerializationError::ParseFloatError),
                 }))
             }
             "qangle" => {
@@ -1149,19 +1149,19 @@ impl<T: BufRead> StringReader<T> {
                 let mut tokens = attribute_value.split_whitespace();
 
                 Some(Attribute::Angle(Angle {
-                    roll: parse_primitive!(self, tokens, attribute_value, Keyvalues2SerializationError::ParseFloatError),
-                    pitch: parse_primitive!(self, tokens, attribute_value, Keyvalues2SerializationError::ParseFloatError),
-                    yaw: parse_primitive!(self, tokens, attribute_value, Keyvalues2SerializationError::ParseFloatError),
+                    roll: parse_primitive!(self, tokens, attribute_value, KeyValues2SerializationError::ParseFloatError),
+                    pitch: parse_primitive!(self, tokens, attribute_value, KeyValues2SerializationError::ParseFloatError),
+                    yaw: parse_primitive!(self, tokens, attribute_value, KeyValues2SerializationError::ParseFloatError),
                 }))
             }
             "quaternion" => {
                 let attribute_value = get_attribute_value!(self);
                 let mut tokens = attribute_value.split_whitespace();
                 Some(Attribute::Quaternion(Quaternion {
-                    x: parse_primitive!(self, tokens, attribute_value, Keyvalues2SerializationError::ParseFloatError),
-                    y: parse_primitive!(self, tokens, attribute_value, Keyvalues2SerializationError::ParseFloatError),
-                    z: parse_primitive!(self, tokens, attribute_value, Keyvalues2SerializationError::ParseFloatError),
-                    w: parse_primitive!(self, tokens, attribute_value, Keyvalues2SerializationError::ParseFloatError),
+                    x: parse_primitive!(self, tokens, attribute_value, KeyValues2SerializationError::ParseFloatError),
+                    y: parse_primitive!(self, tokens, attribute_value, KeyValues2SerializationError::ParseFloatError),
+                    z: parse_primitive!(self, tokens, attribute_value, KeyValues2SerializationError::ParseFloatError),
+                    w: parse_primitive!(self, tokens, attribute_value, KeyValues2SerializationError::ParseFloatError),
                 }))
             }
             "matrix" => {
@@ -1169,28 +1169,28 @@ impl<T: BufRead> StringReader<T> {
                 let mut tokens = attribute_value.split_whitespace();
                 Some(Attribute::Matrix(Matrix([
                     [
-                        parse_primitive!(self, tokens, attribute_value, Keyvalues2SerializationError::ParseFloatError),
-                        parse_primitive!(self, tokens, attribute_value, Keyvalues2SerializationError::ParseFloatError),
-                        parse_primitive!(self, tokens, attribute_value, Keyvalues2SerializationError::ParseFloatError),
-                        parse_primitive!(self, tokens, attribute_value, Keyvalues2SerializationError::ParseFloatError),
+                        parse_primitive!(self, tokens, attribute_value, KeyValues2SerializationError::ParseFloatError),
+                        parse_primitive!(self, tokens, attribute_value, KeyValues2SerializationError::ParseFloatError),
+                        parse_primitive!(self, tokens, attribute_value, KeyValues2SerializationError::ParseFloatError),
+                        parse_primitive!(self, tokens, attribute_value, KeyValues2SerializationError::ParseFloatError),
                     ],
                     [
-                        parse_primitive!(self, tokens, attribute_value, Keyvalues2SerializationError::ParseFloatError),
-                        parse_primitive!(self, tokens, attribute_value, Keyvalues2SerializationError::ParseFloatError),
-                        parse_primitive!(self, tokens, attribute_value, Keyvalues2SerializationError::ParseFloatError),
-                        parse_primitive!(self, tokens, attribute_value, Keyvalues2SerializationError::ParseFloatError),
+                        parse_primitive!(self, tokens, attribute_value, KeyValues2SerializationError::ParseFloatError),
+                        parse_primitive!(self, tokens, attribute_value, KeyValues2SerializationError::ParseFloatError),
+                        parse_primitive!(self, tokens, attribute_value, KeyValues2SerializationError::ParseFloatError),
+                        parse_primitive!(self, tokens, attribute_value, KeyValues2SerializationError::ParseFloatError),
                     ],
                     [
-                        parse_primitive!(self, tokens, attribute_value, Keyvalues2SerializationError::ParseFloatError),
-                        parse_primitive!(self, tokens, attribute_value, Keyvalues2SerializationError::ParseFloatError),
-                        parse_primitive!(self, tokens, attribute_value, Keyvalues2SerializationError::ParseFloatError),
-                        parse_primitive!(self, tokens, attribute_value, Keyvalues2SerializationError::ParseFloatError),
+                        parse_primitive!(self, tokens, attribute_value, KeyValues2SerializationError::ParseFloatError),
+                        parse_primitive!(self, tokens, attribute_value, KeyValues2SerializationError::ParseFloatError),
+                        parse_primitive!(self, tokens, attribute_value, KeyValues2SerializationError::ParseFloatError),
+                        parse_primitive!(self, tokens, attribute_value, KeyValues2SerializationError::ParseFloatError),
                     ],
                     [
-                        parse_primitive!(self, tokens, attribute_value, Keyvalues2SerializationError::ParseFloatError),
-                        parse_primitive!(self, tokens, attribute_value, Keyvalues2SerializationError::ParseFloatError),
-                        parse_primitive!(self, tokens, attribute_value, Keyvalues2SerializationError::ParseFloatError),
-                        parse_primitive!(self, tokens, attribute_value, Keyvalues2SerializationError::ParseFloatError),
+                        parse_primitive!(self, tokens, attribute_value, KeyValues2SerializationError::ParseFloatError),
+                        parse_primitive!(self, tokens, attribute_value, KeyValues2SerializationError::ParseFloatError),
+                        parse_primitive!(self, tokens, attribute_value, KeyValues2SerializationError::ParseFloatError),
+                        parse_primitive!(self, tokens, attribute_value, KeyValues2SerializationError::ParseFloatError),
                     ],
                 ])))
             }
@@ -1203,10 +1203,10 @@ impl<T: BufRead> StringReader<T> {
         element_class: String,
         collected_elements: &mut IndexMap<UUID, Element>,
         element_remap: &mut IndexMap<Element, Vec<(String, ElementAttributeRemap)>>,
-    ) -> Result<Element, Keyvalues2SerializationError> {
+    ) -> Result<Element, KeyValues2SerializationError> {
         let mut element = Element::create(String::new(), element_class);
         if collected_elements.insert(*element.get_id(), Element::clone(&element)).is_some() {
-            return Err(Keyvalues2SerializationError::DuplicateGeneratedElementId);
+            return Err(KeyValues2SerializationError::DuplicateGeneratedElementId);
         }
 
         self.read_attributes(&mut element, collected_elements, element_remap)?;
@@ -1234,7 +1234,7 @@ enum ReadToken {
 pub struct KeyValues2Serializer;
 
 impl Serializer for KeyValues2Serializer {
-    type Error = Keyvalues2SerializationError;
+    type Error = KeyValues2SerializationError;
 
     fn name() -> &'static str {
         "keyvalues2"
@@ -1246,7 +1246,7 @@ impl Serializer for KeyValues2Serializer {
 
     fn serialize_version(buffer: &mut impl Write, header: &Header, root: &Element, version: i32) -> Result<(), Self::Error> {
         if version < 1 || version > Self::version() {
-            return Err(Keyvalues2SerializationError::InvalidEncodingVersion);
+            return Err(KeyValues2SerializationError::InvalidEncodingVersion);
         }
 
         let mut writer = StringWriter::new(buffer);
@@ -1308,11 +1308,11 @@ impl Serializer for KeyValues2Serializer {
 
     fn deserialize(buffer: &mut impl BufRead, encoding: String, version: i32) -> Result<Element, Self::Error> {
         if encoding != Self::name() {
-            return Err(Keyvalues2SerializationError::WrongEncoding);
+            return Err(KeyValues2SerializationError::WrongEncoding);
         }
 
         if version < 1 || version > Self::version() {
-            return Err(Keyvalues2SerializationError::InvalidEncodingVersion);
+            return Err(KeyValues2SerializationError::InvalidEncodingVersion);
         }
 
         let mut reader = StringReader::new(buffer);
@@ -1356,7 +1356,7 @@ impl Serializer for KeyValues2Serializer {
             return Ok(root_element);
         }
 
-        Err(Keyvalues2SerializationError::NoElements)
+        Err(KeyValues2SerializationError::NoElements)
     }
 }
 
@@ -1366,7 +1366,7 @@ impl Serializer for KeyValues2Serializer {
 pub struct KeyValues2FlatSerializer;
 
 impl Serializer for KeyValues2FlatSerializer {
-    type Error = Keyvalues2SerializationError;
+    type Error = KeyValues2SerializationError;
 
     fn name() -> &'static str {
         "keyvalues2_flat"
@@ -1378,7 +1378,7 @@ impl Serializer for KeyValues2FlatSerializer {
 
     fn serialize_version(buffer: &mut impl Write, header: &Header, root: &Element, version: i32) -> Result<(), Self::Error> {
         if version < 1 || version > Self::version() {
-            return Err(Keyvalues2SerializationError::InvalidEncodingVersion);
+            return Err(KeyValues2SerializationError::InvalidEncodingVersion);
         }
 
         let mut writer = StringWriter::new(buffer);
@@ -1440,11 +1440,11 @@ impl Serializer for KeyValues2FlatSerializer {
 
     fn deserialize(buffer: &mut impl BufRead, encoding: String, version: i32) -> Result<Element, Self::Error> {
         if encoding != Self::name() {
-            return Err(Keyvalues2SerializationError::WrongEncoding);
+            return Err(KeyValues2SerializationError::WrongEncoding);
         }
 
         if version < 1 || version > Self::version() {
-            return Err(Keyvalues2SerializationError::InvalidEncodingVersion);
+            return Err(KeyValues2SerializationError::InvalidEncodingVersion);
         }
 
         KeyValues2Serializer::deserialize(buffer, String::from(KeyValues2Serializer::name()), KeyValues2Serializer::version())
