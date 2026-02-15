@@ -20,7 +20,7 @@ pub enum FileHeaderError {
     #[error("The Header Was In An Invalid Format")]
     InvalidFileHeader,
     #[error("Header Was Legacy With An Invalid Encoding")]
-    UnknownLegacyEncoding,
+    UnknownLegacyEncoding(String),
 }
 
 const CURRENT_ENCODING: &str = "dmx";
@@ -29,7 +29,8 @@ const CURRENT_FORMAT_VERSION: i32 = 18;
 /// The header struct represents the header of a DMX file.
 #[derive(Debug, Clone)]
 pub struct Header {
-    format: String,
+    /// The format of the data.
+    pub format: String,
     /// The version of the format.
     pub format_version: i32,
 }
@@ -45,30 +46,15 @@ impl Default for Header {
 
 impl Header {
     /// Creates a new header with the given format and format version.
-    /// The format is truncated to 64 characters.
     pub fn new(format: impl Into<String>, format_version: i32) -> Self {
-        let mut format = format.into();
-        format.truncate(64);
+        let format = format.into();
         Self { format, format_version }
-    }
-
-    /// Sets the format of the header.
-    /// The format is truncated to 64 characters.
-    pub fn set_format(&mut self, format: impl Into<String>) {
-        let mut format = format.into();
-        format.truncate(64);
-        self.format = format;
-    }
-
-    /// Returns the format of the header.
-    pub fn get_format(&self) -> &str {
-        &self.format
     }
 
     /// Returns a header from a string.
     pub fn from_string(value: String) -> Result<(Self, String, i32), FileHeaderError> {
         let header_match =
-            Regex::new(r"<!-- dmx encoding (?P<encoding>(\S+)) (?P<encoding_version>(\d+)) format (?P<format>(\S+)) (?P<format_version>(\d+)) -->").unwrap();
+            Regex::new(r"<!-- dmx encoding (?P<encoding>\S+) (?P<encoding_version>\d+) format (?P<format>\S+) (?P<format_version>\d+) -->").unwrap();
 
         match header_match.captures(&value) {
             Some(captures) => {
@@ -80,7 +66,7 @@ impl Header {
                 Ok((Self::new(format, format_version), encoding, encoding_version))
             }
             None => {
-                let legacy_match = Regex::new(r"<!-- DMXVersion (?P<encoding>\S+?)(?:_v(?P<version>\S+))? -->").unwrap();
+                let legacy_match = Regex::new(r"<!-- DMXVersion (?P<encoding>\S+?)(?:_\S+)? -->").unwrap();
 
                 match legacy_match.captures(&value) {
                     Some(captures) => match &captures["encoding"] {
@@ -116,7 +102,7 @@ impl Header {
                             String::from("keyvalues2_flat"),
                             1,
                         )),
-                        _ => Err(FileHeaderError::UnknownLegacyEncoding),
+                        _ => Err(FileHeaderError::UnknownLegacyEncoding(captures["encoding"].to_string())),
                     },
                     None => Err(FileHeaderError::InvalidFileHeader),
                 }
