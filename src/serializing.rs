@@ -21,8 +21,6 @@ pub enum FileHeaderError {
     InvalidFileHeader,
     #[error("Header Was Legacy With An Invalid Encoding")]
     UnknownLegacyEncoding,
-    #[error("Legacy Header Had No Version")]
-    NoLegacyVersion,
 }
 
 const CURRENT_ENCODING: &str = "dmx";
@@ -92,7 +90,7 @@ impl Header {
                                 format_version: CURRENT_FORMAT_VERSION,
                             },
                             String::from("binary"),
-                            captures.name("version").ok_or(FileHeaderError::NoLegacyVersion)?.as_str().parse()?,
+                            1,
                         )),
                         "sfm" => Ok((
                             Self {
