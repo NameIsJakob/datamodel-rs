@@ -56,50 +56,12 @@ pub struct Color {
     pub alpha: u8,
 }
 
-/// A 2 dimensional vector.
-#[derive(Clone, Copy, Debug, Default)]
-pub struct Vector2 {
-    pub x: f32,
-    pub y: f32,
-}
-
-/// A 3 dimensional vector.
-#[derive(Clone, Copy, Debug, Default)]
-pub struct Vector3 {
-    pub x: f32,
-    pub y: f32,
-    pub z: f32,
-}
-
-/// A 4 dimensional vector.
-#[derive(Clone, Copy, Debug, Default)]
-pub struct Vector4 {
-    pub x: f32,
-    pub y: f32,
-    pub z: f32,
-    pub w: f32,
-}
-
-/// Tait–Bryan angles in degrees.
-#[derive(Clone, Copy, Debug, Default)]
-pub struct Angle {
-    pub pitch: f32,
-    pub yaw: f32,
-    pub roll: f32,
-}
-
-/// A rotation quaternion.
-#[derive(Clone, Copy, Debug, Default)]
-pub struct Quaternion {
-    pub x: f32,
-    pub y: f32,
-    pub z: f32,
-    pub w: f32,
-}
-
-/// A 4 by 4 transformation matrix.
-#[derive(Clone, Copy, Debug, Default)]
-pub struct Matrix(pub [[f32; 4]; 4]);
+pub type Vector2 = mint::Vector2<f32>;
+pub type Vector3 = mint::Vector3<f32>;
+pub type Vector4 = mint::Vector4<f32>;
+pub type Angle = mint::EulerAngles<f32, mint::IntraXYZ>;
+pub type Quaternion = mint::Quaternion<f32>;
+pub type Matrix = mint::RowMatrix4<f32>;
 
 /// A type to get an element array from a value.
 pub type ElementArray = Vec<Option<Element>>;

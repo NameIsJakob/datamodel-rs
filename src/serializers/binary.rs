@@ -339,35 +339,35 @@ impl Serializer for BinarySerializer {
                     }
                     Attribute::Angle(value) => {
                         writer.write_byte(12)?;
-                        writer.write_float(value.pitch)?;
-                        writer.write_float(value.yaw)?;
-                        writer.write_float(value.roll)?;
+                        writer.write_float(value.a)?;
+                        writer.write_float(value.b)?;
+                        writer.write_float(value.c)?;
                     }
                     Attribute::Quaternion(value) => {
                         writer.write_byte(13)?;
-                        writer.write_float(value.x)?;
-                        writer.write_float(value.y)?;
-                        writer.write_float(value.z)?;
-                        writer.write_float(value.w)?;
+                        writer.write_float(value.v.x)?;
+                        writer.write_float(value.v.y)?;
+                        writer.write_float(value.v.z)?;
+                        writer.write_float(value.s)?;
                     }
                     Attribute::Matrix(value) => {
                         writer.write_byte(14)?;
-                        writer.write_float(value.0[0][0])?;
-                        writer.write_float(value.0[0][1])?;
-                        writer.write_float(value.0[0][2])?;
-                        writer.write_float(value.0[0][3])?;
-                        writer.write_float(value.0[1][0])?;
-                        writer.write_float(value.0[1][1])?;
-                        writer.write_float(value.0[1][2])?;
-                        writer.write_float(value.0[1][3])?;
-                        writer.write_float(value.0[2][0])?;
-                        writer.write_float(value.0[2][1])?;
-                        writer.write_float(value.0[2][2])?;
-                        writer.write_float(value.0[2][3])?;
-                        writer.write_float(value.0[3][0])?;
-                        writer.write_float(value.0[3][1])?;
-                        writer.write_float(value.0[3][2])?;
-                        writer.write_float(value.0[3][3])?;
+                        writer.write_float(value.x.x)?;
+                        writer.write_float(value.x.y)?;
+                        writer.write_float(value.x.z)?;
+                        writer.write_float(value.x.w)?;
+                        writer.write_float(value.y.x)?;
+                        writer.write_float(value.y.y)?;
+                        writer.write_float(value.y.z)?;
+                        writer.write_float(value.y.w)?;
+                        writer.write_float(value.z.x)?;
+                        writer.write_float(value.z.y)?;
+                        writer.write_float(value.z.z)?;
+                        writer.write_float(value.z.w)?;
+                        writer.write_float(value.w.x)?;
+                        writer.write_float(value.w.y)?;
+                        writer.write_float(value.w.z)?;
+                        writer.write_float(value.w.w)?;
                     }
                     Attribute::ElementArray(values) => {
                         writer.write_byte(15)?;
@@ -488,9 +488,9 @@ impl Serializer for BinarySerializer {
                         check_array_length!(values);
                         writer.write_integer(values.len() as i32)?;
                         for value in values {
-                            writer.write_float(value.pitch)?;
-                            writer.write_float(value.yaw)?;
-                            writer.write_float(value.roll)?;
+                            writer.write_float(value.a)?;
+                            writer.write_float(value.b)?;
+                            writer.write_float(value.c)?;
                         }
                     }
                     Attribute::QuaternionArray(values) => {
@@ -498,10 +498,10 @@ impl Serializer for BinarySerializer {
                         check_array_length!(values);
                         writer.write_integer(values.len() as i32)?;
                         for value in values {
-                            writer.write_float(value.x)?;
-                            writer.write_float(value.y)?;
-                            writer.write_float(value.z)?;
-                            writer.write_float(value.w)?;
+                            writer.write_float(value.v.x)?;
+                            writer.write_float(value.v.y)?;
+                            writer.write_float(value.v.z)?;
+                            writer.write_float(value.s)?;
                         }
                     }
                     Attribute::MatrixArray(values) => {
@@ -509,22 +509,22 @@ impl Serializer for BinarySerializer {
                         check_array_length!(values);
                         writer.write_integer(values.len() as i32)?;
                         for value in values {
-                            writer.write_float(value.0[0][0])?;
-                            writer.write_float(value.0[0][1])?;
-                            writer.write_float(value.0[0][2])?;
-                            writer.write_float(value.0[0][3])?;
-                            writer.write_float(value.0[1][0])?;
-                            writer.write_float(value.0[1][1])?;
-                            writer.write_float(value.0[1][2])?;
-                            writer.write_float(value.0[1][3])?;
-                            writer.write_float(value.0[2][0])?;
-                            writer.write_float(value.0[2][1])?;
-                            writer.write_float(value.0[2][2])?;
-                            writer.write_float(value.0[2][3])?;
-                            writer.write_float(value.0[3][0])?;
-                            writer.write_float(value.0[3][1])?;
-                            writer.write_float(value.0[3][2])?;
-                            writer.write_float(value.0[3][3])?;
+                            writer.write_float(value.x.x)?;
+                            writer.write_float(value.x.y)?;
+                            writer.write_float(value.x.z)?;
+                            writer.write_float(value.x.w)?;
+                            writer.write_float(value.y.x)?;
+                            writer.write_float(value.y.y)?;
+                            writer.write_float(value.y.z)?;
+                            writer.write_float(value.y.w)?;
+                            writer.write_float(value.z.x)?;
+                            writer.write_float(value.z.y)?;
+                            writer.write_float(value.z.z)?;
+                            writer.write_float(value.z.w)?;
+                            writer.write_float(value.w.x)?;
+                            writer.write_float(value.w.y)?;
+                            writer.write_float(value.w.z)?;
+                            writer.write_float(value.w.w)?;
                         }
                     }
                     _ => {}
@@ -699,22 +699,45 @@ impl Serializer for BinarySerializer {
                         w: reader.read_float()?,
                     }),
                     12 => Attribute::Angle(Angle {
-                        pitch: reader.read_float()?,
-                        yaw: reader.read_float()?,
-                        roll: reader.read_float()?,
+                        a: reader.read_float()?,
+                        b: reader.read_float()?,
+                        c: reader.read_float()?,
+                        marker: std::marker::PhantomData,
                     }),
                     13 => Attribute::Quaternion(Quaternion {
-                        x: reader.read_float()?,
-                        y: reader.read_float()?,
-                        z: reader.read_float()?,
-                        w: reader.read_float()?,
+                        v: Vector3 {
+                            x: reader.read_float()?,
+                            y: reader.read_float()?,
+                            z: reader.read_float()?,
+                        },
+                        s: reader.read_float()?,
                     }),
-                    14 => Attribute::Matrix(Matrix([
-                        [reader.read_float()?, reader.read_float()?, reader.read_float()?, reader.read_float()?],
-                        [reader.read_float()?, reader.read_float()?, reader.read_float()?, reader.read_float()?],
-                        [reader.read_float()?, reader.read_float()?, reader.read_float()?, reader.read_float()?],
-                        [reader.read_float()?, reader.read_float()?, reader.read_float()?, reader.read_float()?],
-                    ])),
+                    14 => Attribute::Matrix(Matrix {
+                        x: Vector4 {
+                            x: reader.read_float()?,
+                            y: reader.read_float()?,
+                            z: reader.read_float()?,
+                            w: reader.read_float()?,
+                        },
+                        y: Vector4 {
+                            x: reader.read_float()?,
+                            y: reader.read_float()?,
+                            z: reader.read_float()?,
+                            w: reader.read_float()?,
+                        },
+                        z: Vector4 {
+                            x: reader.read_float()?,
+                            y: reader.read_float()?,
+                            z: reader.read_float()?,
+                            w: reader.read_float()?,
+                        },
+                        w: Vector4 {
+                            x: reader.read_float()?,
+                            y: reader.read_float()?,
+                            z: reader.read_float()?,
+                            w: reader.read_float()?,
+                        },
+                    }),
                     15 => Attribute::ElementArray(read_attribute_array!({
                         match reader.read_integer()? {
                             index if index < ELEMENT_INDEX_EXTERNAL || index > element_table_length => {
@@ -786,26 +809,49 @@ impl Serializer for BinarySerializer {
                     })),
                     26 => Attribute::AngleArray(read_attribute_array!({
                         Angle {
-                            pitch: reader.read_float()?,
-                            yaw: reader.read_float()?,
-                            roll: reader.read_float()?,
+                            a: reader.read_float()?,
+                            b: reader.read_float()?,
+                            c: reader.read_float()?,
+                            marker: std::marker::PhantomData,
                         }
                     })),
                     27 => Attribute::QuaternionArray(read_attribute_array!({
                         Quaternion {
-                            x: reader.read_float()?,
-                            y: reader.read_float()?,
-                            z: reader.read_float()?,
-                            w: reader.read_float()?,
+                            v: Vector3 {
+                                x: reader.read_float()?,
+                                y: reader.read_float()?,
+                                z: reader.read_float()?,
+                            },
+                            s: reader.read_float()?,
                         }
                     })),
                     28 => Attribute::MatrixArray(read_attribute_array!({
-                        Matrix([
-                            [reader.read_float()?, reader.read_float()?, reader.read_float()?, reader.read_float()?],
-                            [reader.read_float()?, reader.read_float()?, reader.read_float()?, reader.read_float()?],
-                            [reader.read_float()?, reader.read_float()?, reader.read_float()?, reader.read_float()?],
-                            [reader.read_float()?, reader.read_float()?, reader.read_float()?, reader.read_float()?],
-                        ])
+                        Matrix {
+                            x: Vector4 {
+                                x: reader.read_float()?,
+                                y: reader.read_float()?,
+                                z: reader.read_float()?,
+                                w: reader.read_float()?,
+                            },
+                            y: Vector4 {
+                                x: reader.read_float()?,
+                                y: reader.read_float()?,
+                                z: reader.read_float()?,
+                                w: reader.read_float()?,
+                            },
+                            z: Vector4 {
+                                x: reader.read_float()?,
+                                y: reader.read_float()?,
+                                z: reader.read_float()?,
+                                w: reader.read_float()?,
+                            },
+                            w: Vector4 {
+                                x: reader.read_float()?,
+                                y: reader.read_float()?,
+                                z: reader.read_float()?,
+                                w: reader.read_float()?,
+                            },
+                        }
                     })),
                     _ => {
                         return Err(BinarySerializationError::InvalidAttributeType {

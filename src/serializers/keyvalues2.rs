@@ -201,20 +201,21 @@ impl<T: Write> StringWriter<T> {
                     attribute_type_name,
                     format!("{} {} {} {}", vector4.x, vector4.y, vector4.z, vector4.w)
                 )?,
-                Attribute::Angle(angle) => write_attribute_string!(self, name, attribute_type_name, format!("{} {} {}", angle.roll, angle.pitch, angle.yaw))?,
+                Attribute::Angle(angle) => write_attribute_string!(self, name, attribute_type_name, format!("{} {} {}", angle.a, angle.b, angle.c))?,
                 Attribute::Quaternion(quaternion) => write_attribute_string!(
                     self,
                     name,
                     attribute_type_name,
-                    format!("{} {} {} {}", quaternion.x, quaternion.y, quaternion.z, quaternion.w)
+                    format!("{} {} {} {}", quaternion.v.x, quaternion.v.y, quaternion.v.z, quaternion.s)
                 )?,
                 Attribute::Matrix(matrix) => {
                     write_attribute_string!(self, name, attribute_type_name)?;
                     self.write_line("\"")?;
                     self.tab_index += 1;
-                    for row in &matrix.0 {
-                        self.write_line(&format!("{} {} {} {}", row[0], row[1], row[2], row[3]))?;
-                    }
+                    self.write_line(&format!("{} {} {} {}", matrix.x.x, matrix.x.y, matrix.x.z, matrix.x.w))?;
+                    self.write_line(&format!("{} {} {} {}", matrix.y.x, matrix.y.y, matrix.y.z, matrix.y.w))?;
+                    self.write_line(&format!("{} {} {} {}", matrix.z.x, matrix.z.y, matrix.z.z, matrix.z.w))?;
+                    self.write_line(&format!("{} {} {} {}", matrix.w.x, matrix.w.y, matrix.w.z, matrix.w.w))?;
                     self.tab_index -= 1;
                     self.write_line("\"")?;
                 }
@@ -407,9 +408,9 @@ impl<T: Write> StringWriter<T> {
                     self.write_open_bracket()?;
                     if let Some((last_angle, angles)) = angles.split_last() {
                         for angle in angles {
-                            self.write_line(&format!("\"{} {} {}\",", angle.roll, angle.pitch, angle.yaw))?;
+                            self.write_line(&format!("\"{} {} {}\",", angle.a, angle.b, angle.c))?;
                         }
-                        self.write_line(&format!("\"{} {} {}\"", last_angle.roll, last_angle.pitch, last_angle.yaw))?;
+                        self.write_line(&format!("\"{} {} {}\"", last_angle.a, last_angle.b, last_angle.c))?;
                     }
                     self.write_close_bracket()?;
                 }
@@ -418,11 +419,11 @@ impl<T: Write> StringWriter<T> {
                     self.write_open_bracket()?;
                     if let Some((last_quaternion, quaternions)) = quaternions.split_last() {
                         for quaternion in quaternions {
-                            self.write_line(&format!("\"{} {} {} {}\",", quaternion.x, quaternion.y, quaternion.z, quaternion.w))?;
+                            self.write_line(&format!("\"{} {} {} {}\",", quaternion.v.x, quaternion.v.y, quaternion.v.z, quaternion.s))?;
                         }
                         self.write_line(&format!(
                             "\"{} {} {} {}\"",
-                            last_quaternion.x, last_quaternion.y, last_quaternion.z, last_quaternion.w
+                            last_quaternion.v.x, last_quaternion.v.y, last_quaternion.v.z, last_quaternion.s
                         ))?;
                     }
                     self.write_close_bracket()?;
@@ -434,17 +435,19 @@ impl<T: Write> StringWriter<T> {
                         for matrix in matrixes {
                             self.write_line("\"")?;
                             self.tab_index += 1;
-                            for row in &matrix.0 {
-                                self.write_line(&format!("{} {} {} {}", row[0], row[1], row[2], row[3]))?;
-                            }
+                            self.write_line(&format!("{} {} {} {}", matrix.x.x, matrix.x.y, matrix.x.z, matrix.x.w))?;
+                            self.write_line(&format!("{} {} {} {}", matrix.y.x, matrix.y.y, matrix.y.z, matrix.y.w))?;
+                            self.write_line(&format!("{} {} {} {}", matrix.z.x, matrix.z.y, matrix.z.z, matrix.z.w))?;
+                            self.write_line(&format!("{} {} {} {}", matrix.w.x, matrix.w.y, matrix.w.z, matrix.w.w))?;
                             self.tab_index -= 1;
                             self.write_line("\",")?;
                         }
                         self.write_line("\"")?;
                         self.tab_index += 1;
-                        for row in &last_matrix.0 {
-                            self.write_line(&format!("{} {} {} {}", row[0], row[1], row[2], row[3]))?;
-                        }
+                        self.write_line(&format!("{} {} {} {}", last_matrix.x.x, last_matrix.x.y, last_matrix.x.z, last_matrix.x.w))?;
+                        self.write_line(&format!("{} {} {} {}", last_matrix.y.x, last_matrix.y.y, last_matrix.y.z, last_matrix.y.w))?;
+                        self.write_line(&format!("{} {} {} {}", last_matrix.z.x, last_matrix.z.y, last_matrix.z.z, last_matrix.z.w))?;
+                        self.write_line(&format!("{} {} {} {}", last_matrix.w.x, last_matrix.w.y, last_matrix.w.z, last_matrix.w.w))?;
                         self.tab_index -= 1;
                         self.write_line("\"")?;
                     }
@@ -1149,50 +1152,53 @@ impl<T: BufRead> StringReader<T> {
                 let mut tokens = attribute_value.split_whitespace();
 
                 Some(Attribute::Angle(Angle {
-                    roll: parse_primitive!(self, tokens, attribute_value, KeyValues2SerializationError::ParseFloatError),
-                    pitch: parse_primitive!(self, tokens, attribute_value, KeyValues2SerializationError::ParseFloatError),
-                    yaw: parse_primitive!(self, tokens, attribute_value, KeyValues2SerializationError::ParseFloatError),
+                    a: parse_primitive!(self, tokens, attribute_value, KeyValues2SerializationError::ParseFloatError),
+                    b: parse_primitive!(self, tokens, attribute_value, KeyValues2SerializationError::ParseFloatError),
+                    c: parse_primitive!(self, tokens, attribute_value, KeyValues2SerializationError::ParseFloatError),
+                    marker: std::marker::PhantomData,
                 }))
             }
             "quaternion" => {
                 let attribute_value = get_attribute_value!(self);
                 let mut tokens = attribute_value.split_whitespace();
                 Some(Attribute::Quaternion(Quaternion {
-                    x: parse_primitive!(self, tokens, attribute_value, KeyValues2SerializationError::ParseFloatError),
-                    y: parse_primitive!(self, tokens, attribute_value, KeyValues2SerializationError::ParseFloatError),
-                    z: parse_primitive!(self, tokens, attribute_value, KeyValues2SerializationError::ParseFloatError),
-                    w: parse_primitive!(self, tokens, attribute_value, KeyValues2SerializationError::ParseFloatError),
+                    v: Vector3 {
+                        x: parse_primitive!(self, tokens, attribute_value, KeyValues2SerializationError::ParseFloatError),
+                        y: parse_primitive!(self, tokens, attribute_value, KeyValues2SerializationError::ParseFloatError),
+                        z: parse_primitive!(self, tokens, attribute_value, KeyValues2SerializationError::ParseFloatError),
+                    },
+                    s: parse_primitive!(self, tokens, attribute_value, KeyValues2SerializationError::ParseFloatError),
                 }))
             }
             "matrix" => {
                 let attribute_value = get_attribute_value!(self);
                 let mut tokens = attribute_value.split_whitespace();
-                Some(Attribute::Matrix(Matrix([
-                    [
-                        parse_primitive!(self, tokens, attribute_value, KeyValues2SerializationError::ParseFloatError),
-                        parse_primitive!(self, tokens, attribute_value, KeyValues2SerializationError::ParseFloatError),
-                        parse_primitive!(self, tokens, attribute_value, KeyValues2SerializationError::ParseFloatError),
-                        parse_primitive!(self, tokens, attribute_value, KeyValues2SerializationError::ParseFloatError),
-                    ],
-                    [
-                        parse_primitive!(self, tokens, attribute_value, KeyValues2SerializationError::ParseFloatError),
-                        parse_primitive!(self, tokens, attribute_value, KeyValues2SerializationError::ParseFloatError),
-                        parse_primitive!(self, tokens, attribute_value, KeyValues2SerializationError::ParseFloatError),
-                        parse_primitive!(self, tokens, attribute_value, KeyValues2SerializationError::ParseFloatError),
-                    ],
-                    [
-                        parse_primitive!(self, tokens, attribute_value, KeyValues2SerializationError::ParseFloatError),
-                        parse_primitive!(self, tokens, attribute_value, KeyValues2SerializationError::ParseFloatError),
-                        parse_primitive!(self, tokens, attribute_value, KeyValues2SerializationError::ParseFloatError),
-                        parse_primitive!(self, tokens, attribute_value, KeyValues2SerializationError::ParseFloatError),
-                    ],
-                    [
-                        parse_primitive!(self, tokens, attribute_value, KeyValues2SerializationError::ParseFloatError),
-                        parse_primitive!(self, tokens, attribute_value, KeyValues2SerializationError::ParseFloatError),
-                        parse_primitive!(self, tokens, attribute_value, KeyValues2SerializationError::ParseFloatError),
-                        parse_primitive!(self, tokens, attribute_value, KeyValues2SerializationError::ParseFloatError),
-                    ],
-                ])))
+                Some(Attribute::Matrix(Matrix {
+                    x: Vector4 {
+                        x: parse_primitive!(self, tokens, attribute_value, KeyValues2SerializationError::ParseFloatError),
+                        y: parse_primitive!(self, tokens, attribute_value, KeyValues2SerializationError::ParseFloatError),
+                        z: parse_primitive!(self, tokens, attribute_value, KeyValues2SerializationError::ParseFloatError),
+                        w: parse_primitive!(self, tokens, attribute_value, KeyValues2SerializationError::ParseFloatError),
+                    },
+                    y: Vector4 {
+                        x: parse_primitive!(self, tokens, attribute_value, KeyValues2SerializationError::ParseFloatError),
+                        y: parse_primitive!(self, tokens, attribute_value, KeyValues2SerializationError::ParseFloatError),
+                        z: parse_primitive!(self, tokens, attribute_value, KeyValues2SerializationError::ParseFloatError),
+                        w: parse_primitive!(self, tokens, attribute_value, KeyValues2SerializationError::ParseFloatError),
+                    },
+                    z: Vector4 {
+                        x: parse_primitive!(self, tokens, attribute_value, KeyValues2SerializationError::ParseFloatError),
+                        y: parse_primitive!(self, tokens, attribute_value, KeyValues2SerializationError::ParseFloatError),
+                        z: parse_primitive!(self, tokens, attribute_value, KeyValues2SerializationError::ParseFloatError),
+                        w: parse_primitive!(self, tokens, attribute_value, KeyValues2SerializationError::ParseFloatError),
+                    },
+                    w: Vector4 {
+                        x: parse_primitive!(self, tokens, attribute_value, KeyValues2SerializationError::ParseFloatError),
+                        y: parse_primitive!(self, tokens, attribute_value, KeyValues2SerializationError::ParseFloatError),
+                        z: parse_primitive!(self, tokens, attribute_value, KeyValues2SerializationError::ParseFloatError),
+                        w: parse_primitive!(self, tokens, attribute_value, KeyValues2SerializationError::ParseFloatError),
+                    },
+                }))
             }
             _ => None,
         })
