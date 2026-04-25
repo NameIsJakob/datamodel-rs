@@ -248,15 +248,20 @@ impl Serializer for BinarySerializer {
 
         for collected_element in &collected_elements {
             let collected_element_attributes = collected_element.get_attributes();
-            if collected_element_attributes.len() > MAX_ARRAY_LENGTH {
+            let attribute_count = collected_element_attributes.len() - collected_element_attributes.contains_key("name") as usize;
+            if attribute_count > MAX_ARRAY_LENGTH {
                 return Err(BinarySerializationError::TooManyAttributes {
                     element: Element::clone(collected_element),
-                    count: collected_element_attributes.len(),
+                    count: attribute_count,
                 });
             }
-            writer.write_integer(collected_element_attributes.len() as i32)?;
+            writer.write_integer(attribute_count as i32)?;
 
             for (attribute_name, attribute_value) in collected_element_attributes.iter() {
+                if attribute_name == "name" {
+                    continue;
+                }
+
                 if version >= VERSION_HAS_SYMBOL_TABLE {
                     if version >= VERSION_LARGE_SYMBOL_TABLE {
                         writer.write_integer(collected_symbols.get_index_of(attribute_name).unwrap() as i32)?;
@@ -265,10 +270,6 @@ impl Serializer for BinarySerializer {
                     }
                 } else {
                     writer.write_string(attribute_name.as_str())?;
-                }
-
-                if attribute_name == "name" {
-                    continue;
                 }
 
                 if attribute_name == "id" && attribute_value.get_type() == AttributeType::ObjectId {
