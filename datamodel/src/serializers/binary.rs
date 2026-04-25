@@ -3,14 +3,14 @@ use std::{
     str::FromStr,
 };
 
-use chrono::Duration;
 use indexmap::IndexSet;
 use thiserror::Error as ThisError;
 use uuid::{Error as UUIDError, Uuid as UUID};
 
 use crate::{
-    Element, Header, Serializer,
-    attribute::{Angle, Attribute, BinaryBlock, Color, Matrix, Quaternion, Vector2, Vector3, Vector4},
+    attribute::{Angle, Attribute, AttributeInfo, AttributeType, AttributeValue, BinaryBlock, Color, Matrix, Quaternion, Time, Vector2, Vector3, Vector4},
+    element::{Element, ElementClass},
+    serializing::{Header, Serializer},
 };
 
 const MAX_SHORT_ARRAY_LENGTH: usize = (i16::MAX as usize) + 1;
@@ -34,8 +34,6 @@ const ELEMENT_INDEX_EXTERNAL: i32 = -2;
 pub enum BinarySerializationError {
     #[error("Io Error, Error \"{0}\"")]
     IoError(#[from] Error),
-    #[error("Can't Serialize Deprecated Attribute Type For Attribute \"{}\" In Element \"{}\"", .attribute, .element.get_id())]
-    DeprecatedAttribute { attribute: String, element: Element },
     #[error("Can't Serialize Attribute Type For Attribute \"{}\" In Element \"{}\" As Version {} Doesn't Support It", .attribute, .element.get_id(), .version)]
     InvalidVersionForAttribute { attribute: String, element: Element, version: i32 },
     #[error("Too Many Symbols To Serialize To Table, Symbol Count {} - Max {}", .count, .max)]
@@ -52,6 +50,10 @@ pub enum BinarySerializationError {
     InvalidEncoding { encoding: String },
     #[error("Version Past In Is Invalid, Invalid Version {} - Min {} Max {}", .version, 1, BinarySerializer::version())]
     InvalidVersion { version: i32 },
+    #[error("Attribute \"name\" In Element \"{}\" Is Not Type String", element.get_id())]
+    InvalidNameAttribute { element: Element },
+    #[error("Attribute \"id\" In Element \"{}\" Can't Be Type ObjectId", element.get_id())]
+    InvalidIdAttribute { element: Element },
     #[error("Symbol Table Length Is Invalid, Invalid Length {} - Min {} Max {}", .length, 0, MAX_ARRAY_LENGTH)]
     InvalidSymbolTableLength { length: i32 },
     #[error("Element Table Length Is Invalid, Invalid Length {} - Min {} Max {}", .length, 1, MAX_ARRAY_LENGTH)]
@@ -61,7 +63,7 @@ pub enum BinarySerializationError {
     #[error("Element Attribute Count Is Invalid, Invalid Count {} - Min {} Max {}", .count, 0, MAX_ARRAY_LENGTH)]
     InvalidAttributeCount { count: i32 },
     #[error("Attribute Type Is Invalid For Attribute \"{}\", Invalid Type {} - Supported {} To {}", .attribute_name, .attribute_type, 1, 28)]
-    InvalidAttributeType { attribute_name: String, attribute_type: i8 },
+    InvalidAttributeValue { attribute_name: String, attribute_type: i8 },
     #[error("Index To Element Table Is Invalid, Invalid Index {} - Min {} Max {}", .index, 0, .length)]
     InvalidElementTableIndex { index: i32, length: i32 },
     #[error("Failed To Parse UUID, Error \"{0}\"")]
@@ -72,7 +74,6 @@ pub enum BinarySerializationError {
     InvalidAttributeArrayLength { length: i32 },
 }
 
-/// Serialize elements to a binary format.
 pub struct BinarySerializer;
 
 impl Serializer for BinarySerializer {
@@ -105,7 +106,17 @@ impl Serializer for BinarySerializer {
             if version >= VERSION_HAS_SYMBOL_TABLE {
                 collected_symbols.insert(current_check_element.get_class().clone());
                 if version >= VERSION_GLOBAL_SYMBOL_TABLE {
-                    collected_symbols.insert(current_check_element.get_name().clone());
+                    if let Some(element_name_attribute) = current_check_element.get_attribute("name") {
+                        if let AttributeValue::String(element_name) = &*element_name_attribute.get_inner() {
+                            collected_symbols.insert(element_name.clone());
+                        } else {
+                            return Err(BinarySerializationError::InvalidNameAttribute {
+                                element: current_check_element,
+                            });
+                        }
+                    } else {
+                        collected_symbols.insert(String::new());
+                    }
                 }
             }
 
@@ -114,57 +125,51 @@ impl Serializer for BinarySerializer {
                     collected_symbols.insert(attribute_name.clone());
                 }
 
-                match attribute_value {
-                    Attribute::Element(value) => {
+                match &*attribute_value.get_inner() {
+                    AttributeValue::Element(value) => {
                         if let Some(element) = value
                             && collected_elements.insert(Element::clone(element))
                         {
                             element_collection_stack.push(Element::clone(element));
                         }
                     }
-                    Attribute::String(value) => {
-                        if version >= VERSION_GLOBAL_SYMBOL_TABLE {
-                            collected_symbols.insert(value.clone());
-                        }
+                    AttributeValue::String(value) if version >= VERSION_GLOBAL_SYMBOL_TABLE => {
+                        collected_symbols.insert(value.clone());
                     }
-                    #[allow(deprecated)]
-                    Attribute::ObjectId(_) => {
-                        return Err(BinarySerializationError::DeprecatedAttribute {
+                    AttributeValue::ObjectId(_) if version >= VERSION_DEPRECATES_OBJECT_ID => {
+                        return Err(BinarySerializationError::InvalidVersionForAttribute {
                             attribute: attribute_name.clone(),
                             element: Element::clone(&current_check_element),
+                            version,
                         });
                     }
-                    Attribute::Time(_) => {
-                        if version < VERSION_DEPRECATES_OBJECT_ID {
-                            return Err(BinarySerializationError::InvalidVersionForAttribute {
-                                attribute: attribute_name.clone(),
-                                element: Element::clone(&current_check_element),
-                                version,
-                            });
-                        }
+                    AttributeValue::Time(_) if version < VERSION_DEPRECATES_OBJECT_ID => {
+                        return Err(BinarySerializationError::InvalidVersionForAttribute {
+                            attribute: attribute_name.clone(),
+                            element: Element::clone(&current_check_element),
+                            version,
+                        });
                     }
-                    Attribute::ElementArray(values) => {
+                    AttributeValue::ElementArray(values) => {
                         for element in values.iter().flatten() {
                             if collected_elements.insert(Element::clone(element)) {
                                 element_collection_stack.push(Element::clone(element));
                             }
                         }
                     }
-                    #[allow(deprecated)]
-                    Attribute::ObjectIdArray(_) => {
-                        return Err(BinarySerializationError::DeprecatedAttribute {
+                    AttributeValue::ObjectIdArray(_) if version >= VERSION_DEPRECATES_OBJECT_ID => {
+                        return Err(BinarySerializationError::InvalidVersionForAttribute {
                             attribute: attribute_name.clone(),
                             element: Element::clone(&current_check_element),
+                            version,
                         });
                     }
-                    Attribute::TimeArray(_) => {
-                        if version < VERSION_DEPRECATES_OBJECT_ID {
-                            return Err(BinarySerializationError::InvalidVersionForAttribute {
-                                attribute: attribute_name.clone(),
-                                element: Element::clone(&current_check_element),
-                                version,
-                            });
-                        }
+                    AttributeValue::TimeArray(_) if version < VERSION_DEPRECATES_OBJECT_ID => {
+                        return Err(BinarySerializationError::InvalidVersionForAttribute {
+                            attribute: attribute_name.clone(),
+                            element: Element::clone(&current_check_element),
+                            version,
+                        });
                     }
                     _ => {}
                 }
@@ -212,14 +217,30 @@ impl Serializer for BinarySerializer {
                 writer.write_string(collected_element.get_class().as_str())?;
             }
 
-            if version >= VERSION_GLOBAL_SYMBOL_TABLE {
-                if version >= VERSION_LARGE_SYMBOL_TABLE {
-                    writer.write_integer(collected_symbols.get_index_of(collected_element.get_name().as_str()).unwrap() as i32)?;
+            if let Some(element_name_attribute) = collected_element.get_attribute("name") {
+                if let AttributeValue::String(element_name) = &*element_name_attribute.get_inner() {
+                    if version >= VERSION_GLOBAL_SYMBOL_TABLE {
+                        if version >= VERSION_LARGE_SYMBOL_TABLE {
+                            writer.write_integer(collected_symbols.get_index_of(element_name).unwrap() as i32)?;
+                        } else {
+                            writer.write_short(collected_symbols.get_index_of(element_name).unwrap() as i16)?;
+                        }
+                    } else {
+                        writer.write_string(element_name)?;
+                    }
                 } else {
-                    writer.write_short(collected_symbols.get_index_of(collected_element.get_name().as_str()).unwrap() as i16)?;
+                    return Err(BinarySerializationError::InvalidNameAttribute {
+                        element: Element::clone(collected_element),
+                    });
+                }
+            } else if version >= VERSION_GLOBAL_SYMBOL_TABLE {
+                if version >= VERSION_LARGE_SYMBOL_TABLE {
+                    writer.write_integer(collected_symbols.get_index_of("").unwrap() as i32)?;
+                } else {
+                    writer.write_short(collected_symbols.get_index_of("").unwrap() as i16)?;
                 }
             } else {
-                writer.write_string(collected_element.get_name().as_str())?;
+                writer.write_string("")?;
             }
 
             writer.write_uuid(*collected_element.get_id())?;
@@ -246,6 +267,16 @@ impl Serializer for BinarySerializer {
                     writer.write_string(attribute_name.as_str())?;
                 }
 
+                if attribute_name == "name" {
+                    continue;
+                }
+
+                if attribute_name == "id" && attribute_value.get_type() == AttributeType::ObjectId {
+                    return Err(BinarySerializationError::InvalidIdAttribute {
+                        element: Element::clone(collected_element),
+                    });
+                }
+
                 macro_rules! check_array_length {
                     ($values:expr) => {
                         if $values.len() > MAX_ARRAY_LENGTH {
@@ -258,8 +289,8 @@ impl Serializer for BinarySerializer {
                     };
                 }
 
-                match attribute_value {
-                    Attribute::Element(value) => {
+                match &*attribute_value.get_inner() {
+                    AttributeValue::Element(value) => {
                         writer.write_byte(1)?;
                         let element_value = match value {
                             Some(element_value) => element_value,
@@ -270,19 +301,19 @@ impl Serializer for BinarySerializer {
                         };
                         writer.write_integer(collected_elements.get_index_of(element_value).unwrap() as i32)?;
                     }
-                    Attribute::Integer(value) => {
+                    AttributeValue::Integer(value) => {
                         writer.write_byte(2)?;
                         writer.write_integer(*value)?;
                     }
-                    Attribute::Float(value) => {
+                    AttributeValue::Float(value) => {
                         writer.write_byte(3)?;
                         writer.write_float(*value)?;
                     }
-                    Attribute::Boolean(value) => {
+                    AttributeValue::Boolean(value) => {
                         writer.write_byte(4)?;
                         writer.write_byte(*value as i8)?;
                     }
-                    Attribute::String(value) => {
+                    AttributeValue::String(value) => {
                         writer.write_byte(5)?;
                         if version >= VERSION_GLOBAL_SYMBOL_TABLE {
                             if version >= VERSION_LARGE_SYMBOL_TABLE {
@@ -294,7 +325,7 @@ impl Serializer for BinarySerializer {
                             writer.write_string(value)?;
                         }
                     }
-                    Attribute::Binary(value) => {
+                    AttributeValue::Binary(value) => {
                         writer.write_byte(6)?;
                         if value.0.len() > MAX_ARRAY_LENGTH {
                             return Err(BinarySerializationError::BinaryDataTooLong {
@@ -308,68 +339,72 @@ impl Serializer for BinarySerializer {
                             writer.write_unsigned_byte(*byte)?;
                         }
                     }
-                    Attribute::Time(value) => {
+                    AttributeValue::ObjectId(value) => {
                         writer.write_byte(7)?;
-                        writer.write_integer((value.as_seconds_f64() * 10_000f64) as i32)?;
+                        writer.write_uuid(*value)?;
                     }
-                    Attribute::Color(value) => {
+                    AttributeValue::Time(value) => {
+                        writer.write_byte(7)?;
+                        writer.write_integer(value.0)?;
+                    }
+                    AttributeValue::Color(value) => {
                         writer.write_byte(8)?;
                         writer.write_unsigned_byte(value.red)?;
                         writer.write_unsigned_byte(value.green)?;
                         writer.write_unsigned_byte(value.blue)?;
                         writer.write_unsigned_byte(value.alpha)?;
                     }
-                    Attribute::Vector2(value) => {
+                    AttributeValue::Vector2(value) => {
                         writer.write_byte(9)?;
                         writer.write_float(value.x)?;
                         writer.write_float(value.y)?;
                     }
-                    Attribute::Vector3(value) => {
+                    AttributeValue::Vector3(value) => {
                         writer.write_byte(10)?;
                         writer.write_float(value.x)?;
                         writer.write_float(value.y)?;
                         writer.write_float(value.z)?;
                     }
-                    Attribute::Vector4(value) => {
+                    AttributeValue::Vector4(value) => {
                         writer.write_byte(11)?;
                         writer.write_float(value.x)?;
                         writer.write_float(value.y)?;
                         writer.write_float(value.z)?;
                         writer.write_float(value.w)?;
                     }
-                    Attribute::Angle(value) => {
+                    AttributeValue::Angle(value) => {
                         writer.write_byte(12)?;
-                        writer.write_float(value.a)?;
-                        writer.write_float(value.b)?;
-                        writer.write_float(value.c)?;
+                        writer.write_float(value.pitch)?;
+                        writer.write_float(value.yaw)?;
+                        writer.write_float(value.roll)?;
                     }
-                    Attribute::Quaternion(value) => {
+                    AttributeValue::Quaternion(value) => {
                         writer.write_byte(13)?;
-                        writer.write_float(value.v.x)?;
-                        writer.write_float(value.v.y)?;
-                        writer.write_float(value.v.z)?;
-                        writer.write_float(value.s)?;
+                        writer.write_float(value.x)?;
+                        writer.write_float(value.y)?;
+                        writer.write_float(value.z)?;
+                        writer.write_float(value.w)?;
                     }
-                    Attribute::Matrix(value) => {
+                    AttributeValue::Matrix(value) => {
                         writer.write_byte(14)?;
-                        writer.write_float(value.x.x)?;
-                        writer.write_float(value.x.y)?;
-                        writer.write_float(value.x.z)?;
-                        writer.write_float(value.x.w)?;
-                        writer.write_float(value.y.x)?;
-                        writer.write_float(value.y.y)?;
-                        writer.write_float(value.y.z)?;
-                        writer.write_float(value.y.w)?;
-                        writer.write_float(value.z.x)?;
-                        writer.write_float(value.z.y)?;
-                        writer.write_float(value.z.z)?;
-                        writer.write_float(value.z.w)?;
-                        writer.write_float(value.w.x)?;
-                        writer.write_float(value.w.y)?;
-                        writer.write_float(value.w.z)?;
-                        writer.write_float(value.w.w)?;
+                        writer.write_float(value.0[0][0])?;
+                        writer.write_float(value.0[0][1])?;
+                        writer.write_float(value.0[0][2])?;
+                        writer.write_float(value.0[0][3])?;
+                        writer.write_float(value.0[1][0])?;
+                        writer.write_float(value.0[1][1])?;
+                        writer.write_float(value.0[1][2])?;
+                        writer.write_float(value.0[1][3])?;
+                        writer.write_float(value.0[2][0])?;
+                        writer.write_float(value.0[2][1])?;
+                        writer.write_float(value.0[2][2])?;
+                        writer.write_float(value.0[2][3])?;
+                        writer.write_float(value.0[3][0])?;
+                        writer.write_float(value.0[3][1])?;
+                        writer.write_float(value.0[3][2])?;
+                        writer.write_float(value.0[3][3])?;
                     }
-                    Attribute::ElementArray(values) => {
+                    AttributeValue::ElementArray(values) => {
                         writer.write_byte(15)?;
                         check_array_length!(values);
                         writer.write_integer(values.len() as i32)?;
@@ -384,7 +419,7 @@ impl Serializer for BinarySerializer {
                             writer.write_integer(collected_elements.get_index_of(element_value).unwrap() as i32)?;
                         }
                     }
-                    Attribute::IntegerArray(values) => {
+                    AttributeValue::IntegerArray(values) => {
                         writer.write_byte(16)?;
                         check_array_length!(values);
                         writer.write_integer(values.len() as i32)?;
@@ -392,7 +427,7 @@ impl Serializer for BinarySerializer {
                             writer.write_integer(*value)?;
                         }
                     }
-                    Attribute::FloatArray(values) => {
+                    AttributeValue::FloatArray(values) => {
                         writer.write_byte(17)?;
                         check_array_length!(values);
                         writer.write_integer(values.len() as i32)?;
@@ -400,7 +435,7 @@ impl Serializer for BinarySerializer {
                             writer.write_float(*value)?;
                         }
                     }
-                    Attribute::BooleanArray(values) => {
+                    AttributeValue::BooleanArray(values) => {
                         writer.write_byte(18)?;
                         check_array_length!(values);
                         writer.write_integer(values.len() as i32)?;
@@ -408,7 +443,7 @@ impl Serializer for BinarySerializer {
                             writer.write_byte(*value as i8)?;
                         }
                     }
-                    Attribute::StringArray(values) => {
+                    AttributeValue::StringArray(values) => {
                         writer.write_byte(19)?;
                         check_array_length!(values);
                         writer.write_integer(values.len() as i32)?;
@@ -416,7 +451,7 @@ impl Serializer for BinarySerializer {
                             writer.write_string(value)?;
                         }
                     }
-                    Attribute::BinaryArray(values) => {
+                    AttributeValue::BinaryArray(values) => {
                         writer.write_byte(20)?;
                         check_array_length!(values);
                         writer.write_integer(values.len() as i32)?;
@@ -434,15 +469,22 @@ impl Serializer for BinarySerializer {
                             }
                         }
                     }
-                    Attribute::TimeArray(values) => {
+                    AttributeValue::ObjectIdArray(values) => {
+                        writer.write_byte(21)?;
+                        check_array_length!(values);
+                        for &value in values {
+                            writer.write_uuid(value)?;
+                        }
+                    }
+                    AttributeValue::TimeArray(values) => {
                         writer.write_byte(21)?;
                         check_array_length!(values);
                         writer.write_integer(values.len() as i32)?;
                         for value in values {
-                            writer.write_integer((value.as_seconds_f64() * 10_000f64) as i32)?;
+                            writer.write_integer(value.0)?;
                         }
                     }
-                    Attribute::ColorArray(values) => {
+                    AttributeValue::ColorArray(values) => {
                         writer.write_byte(22)?;
                         check_array_length!(values);
                         writer.write_integer(values.len() as i32)?;
@@ -453,7 +495,7 @@ impl Serializer for BinarySerializer {
                             writer.write_unsigned_byte(value.alpha)?;
                         }
                     }
-                    Attribute::Vector2Array(values) => {
+                    AttributeValue::Vector2Array(values) => {
                         writer.write_byte(23)?;
                         check_array_length!(values);
                         writer.write_integer(values.len() as i32)?;
@@ -462,7 +504,7 @@ impl Serializer for BinarySerializer {
                             writer.write_float(value.y)?;
                         }
                     }
-                    Attribute::Vector3Array(values) => {
+                    AttributeValue::Vector3Array(values) => {
                         writer.write_byte(24)?;
                         check_array_length!(values);
                         writer.write_integer(values.len() as i32)?;
@@ -472,7 +514,7 @@ impl Serializer for BinarySerializer {
                             writer.write_float(value.z)?;
                         }
                     }
-                    Attribute::Vector4Array(values) => {
+                    AttributeValue::Vector4Array(values) => {
                         writer.write_byte(25)?;
                         check_array_length!(values);
                         writer.write_integer(values.len() as i32)?;
@@ -483,51 +525,50 @@ impl Serializer for BinarySerializer {
                             writer.write_float(value.w)?;
                         }
                     }
-                    Attribute::AngleArray(values) => {
+                    AttributeValue::AngleArray(values) => {
                         writer.write_byte(26)?;
                         check_array_length!(values);
                         writer.write_integer(values.len() as i32)?;
                         for value in values {
-                            writer.write_float(value.a)?;
-                            writer.write_float(value.b)?;
-                            writer.write_float(value.c)?;
+                            writer.write_float(value.pitch)?;
+                            writer.write_float(value.yaw)?;
+                            writer.write_float(value.roll)?;
                         }
                     }
-                    Attribute::QuaternionArray(values) => {
+                    AttributeValue::QuaternionArray(values) => {
                         writer.write_byte(27)?;
                         check_array_length!(values);
                         writer.write_integer(values.len() as i32)?;
                         for value in values {
-                            writer.write_float(value.v.x)?;
-                            writer.write_float(value.v.y)?;
-                            writer.write_float(value.v.z)?;
-                            writer.write_float(value.s)?;
+                            writer.write_float(value.x)?;
+                            writer.write_float(value.y)?;
+                            writer.write_float(value.z)?;
+                            writer.write_float(value.w)?;
                         }
                     }
-                    Attribute::MatrixArray(values) => {
+                    AttributeValue::MatrixArray(values) => {
                         writer.write_byte(28)?;
                         check_array_length!(values);
                         writer.write_integer(values.len() as i32)?;
                         for value in values {
-                            writer.write_float(value.x.x)?;
-                            writer.write_float(value.x.y)?;
-                            writer.write_float(value.x.z)?;
-                            writer.write_float(value.x.w)?;
-                            writer.write_float(value.y.x)?;
-                            writer.write_float(value.y.y)?;
-                            writer.write_float(value.y.z)?;
-                            writer.write_float(value.y.w)?;
-                            writer.write_float(value.z.x)?;
-                            writer.write_float(value.z.y)?;
-                            writer.write_float(value.z.z)?;
-                            writer.write_float(value.z.w)?;
-                            writer.write_float(value.w.x)?;
-                            writer.write_float(value.w.y)?;
-                            writer.write_float(value.w.z)?;
-                            writer.write_float(value.w.w)?;
+                            writer.write_float(value.0[0][0])?;
+                            writer.write_float(value.0[0][1])?;
+                            writer.write_float(value.0[0][2])?;
+                            writer.write_float(value.0[0][3])?;
+                            writer.write_float(value.0[1][0])?;
+                            writer.write_float(value.0[1][1])?;
+                            writer.write_float(value.0[1][2])?;
+                            writer.write_float(value.0[1][3])?;
+                            writer.write_float(value.0[2][0])?;
+                            writer.write_float(value.0[2][1])?;
+                            writer.write_float(value.0[2][2])?;
+                            writer.write_float(value.0[2][3])?;
+                            writer.write_float(value.0[3][0])?;
+                            writer.write_float(value.0[3][1])?;
+                            writer.write_float(value.0[3][2])?;
+                            writer.write_float(value.0[3][3])?;
                         }
                     }
-                    _ => {}
                 }
             }
         }
@@ -601,8 +642,9 @@ impl Serializer for BinarySerializer {
                 reader.read_string()?
             };
             let element_id = reader.read_uuid()?;
-
-            element_table.push(Element::full(element_name, element_class, element_id));
+            let mut new_element = Element::full(element_class, element_id);
+            new_element.set_attribute("name", element_name.into_attribute());
+            element_table.push(new_element);
         }
 
         for current_element_index in 0..element_table.len() {
@@ -635,7 +677,7 @@ impl Serializer for BinarySerializer {
 
                 let attribute_type = reader.read_byte()?;
                 let attribute_value = match attribute_type {
-                    1 => Attribute::Element(match reader.read_integer()? {
+                    1 => AttributeValue::Element(match reader.read_integer()? {
                         index if index < ELEMENT_INDEX_EXTERNAL || index > element_table_length => {
                             return Err(BinarySerializationError::InvalidElementTableIndex {
                                 index,
@@ -643,17 +685,13 @@ impl Serializer for BinarySerializer {
                             });
                         }
                         ELEMENT_INDEX_NULL => None,
-                        ELEMENT_INDEX_EXTERNAL => Some(Element::full(
-                            Element::DEFAULT_ELEMENT_NAME,
-                            Element::DEFAULT_ELEMENT_CLASS,
-                            UUID::from_str(&reader.read_string()?)?,
-                        )),
+                        ELEMENT_INDEX_EXTERNAL => Some(Element::full(Element::class_name(), UUID::from_str(&reader.read_string()?)?)),
                         index => Some(Element::clone(&element_table[index as usize])),
                     }),
-                    2 => Attribute::Integer(reader.read_integer()?),
-                    3 => Attribute::Float(reader.read_float()?),
-                    4 => Attribute::Boolean(reader.read_unsigned_byte()? != 0),
-                    5 => Attribute::String(if version >= VERSION_GLOBAL_SYMBOL_TABLE {
+                    2 => AttributeValue::Integer(reader.read_integer()?),
+                    3 => AttributeValue::Float(reader.read_float()?),
+                    4 => AttributeValue::Boolean(reader.read_unsigned_byte()? != 0),
+                    5 => AttributeValue::String(if version >= VERSION_GLOBAL_SYMBOL_TABLE {
                         get_string_from_table!()
                     } else {
                         reader.read_string()?
@@ -667,78 +705,49 @@ impl Serializer for BinarySerializer {
                         for _ in 0..binary_data_length {
                             binary_data.push(reader.read_unsigned_byte()?);
                         }
-                        Attribute::Binary(BinaryBlock(binary_data))
+                        AttributeValue::Binary(BinaryBlock(binary_data))
                     }
-                    attribute_type if attribute_type == 7 && version < VERSION_DEPRECATES_OBJECT_ID =>
-                    {
-                        #[allow(deprecated)]
-                        Attribute::ObjectId(reader.read_uuid()?)
-                    }
-                    attribute_type if attribute_type == 7 && version >= VERSION_DEPRECATES_OBJECT_ID => {
-                        Attribute::Time(Duration::nanoseconds(((reader.read_integer()? as f64 / 10_000.0) * 1_000_000_000.0) as i64))
-                    }
-                    8 => Attribute::Color(Color {
+                    attribute_type if attribute_type == 7 && version < VERSION_DEPRECATES_OBJECT_ID => AttributeValue::ObjectId(reader.read_uuid()?),
+                    attribute_type if attribute_type == 7 && version >= VERSION_DEPRECATES_OBJECT_ID => AttributeValue::Time(Time(reader.read_integer()?)),
+                    8 => AttributeValue::Color(Color {
                         red: reader.read_unsigned_byte()?,
                         green: reader.read_unsigned_byte()?,
                         blue: reader.read_unsigned_byte()?,
                         alpha: reader.read_unsigned_byte()?,
                     }),
-                    9 => Attribute::Vector2(Vector2 {
+                    9 => AttributeValue::Vector2(Vector2 {
                         x: reader.read_float()?,
                         y: reader.read_float()?,
                     }),
-                    10 => Attribute::Vector3(Vector3 {
+                    10 => AttributeValue::Vector3(Vector3 {
                         x: reader.read_float()?,
                         y: reader.read_float()?,
                         z: reader.read_float()?,
                     }),
-                    11 => Attribute::Vector4(Vector4 {
+                    11 => AttributeValue::Vector4(Vector4 {
                         x: reader.read_float()?,
                         y: reader.read_float()?,
                         z: reader.read_float()?,
                         w: reader.read_float()?,
                     }),
-                    12 => Attribute::Angle(Angle {
-                        a: reader.read_float()?,
-                        b: reader.read_float()?,
-                        c: reader.read_float()?,
-                        marker: std::marker::PhantomData,
+                    12 => AttributeValue::Angle(Angle {
+                        pitch: reader.read_float()?,
+                        yaw: reader.read_float()?,
+                        roll: reader.read_float()?,
                     }),
-                    13 => Attribute::Quaternion(Quaternion {
-                        v: Vector3 {
-                            x: reader.read_float()?,
-                            y: reader.read_float()?,
-                            z: reader.read_float()?,
-                        },
-                        s: reader.read_float()?,
+                    13 => AttributeValue::Quaternion(Quaternion {
+                        x: reader.read_float()?,
+                        y: reader.read_float()?,
+                        z: reader.read_float()?,
+                        w: reader.read_float()?,
                     }),
-                    14 => Attribute::Matrix(Matrix {
-                        x: Vector4 {
-                            x: reader.read_float()?,
-                            y: reader.read_float()?,
-                            z: reader.read_float()?,
-                            w: reader.read_float()?,
-                        },
-                        y: Vector4 {
-                            x: reader.read_float()?,
-                            y: reader.read_float()?,
-                            z: reader.read_float()?,
-                            w: reader.read_float()?,
-                        },
-                        z: Vector4 {
-                            x: reader.read_float()?,
-                            y: reader.read_float()?,
-                            z: reader.read_float()?,
-                            w: reader.read_float()?,
-                        },
-                        w: Vector4 {
-                            x: reader.read_float()?,
-                            y: reader.read_float()?,
-                            z: reader.read_float()?,
-                            w: reader.read_float()?,
-                        },
-                    }),
-                    15 => Attribute::ElementArray(read_attribute_array!({
+                    14 => AttributeValue::Matrix(Matrix([
+                        [reader.read_float()?, reader.read_float()?, reader.read_float()?, reader.read_float()?],
+                        [reader.read_float()?, reader.read_float()?, reader.read_float()?, reader.read_float()?],
+                        [reader.read_float()?, reader.read_float()?, reader.read_float()?, reader.read_float()?],
+                        [reader.read_float()?, reader.read_float()?, reader.read_float()?, reader.read_float()?],
+                    ])),
+                    15 => AttributeValue::ElementArray(read_attribute_array!({
                         match reader.read_integer()? {
                             index if index < ELEMENT_INDEX_EXTERNAL || index > element_table_length => {
                                 return Err(BinarySerializationError::InvalidElementTableIndex {
@@ -747,19 +756,15 @@ impl Serializer for BinarySerializer {
                                 });
                             }
                             ELEMENT_INDEX_NULL => None,
-                            ELEMENT_INDEX_EXTERNAL => Some(Element::full(
-                                Element::DEFAULT_ELEMENT_NAME,
-                                Element::DEFAULT_ELEMENT_CLASS,
-                                UUID::from_str(&reader.read_string()?)?,
-                            )),
+                            ELEMENT_INDEX_EXTERNAL => Some(Element::full(Element::class_name(), UUID::from_str(&reader.read_string()?)?)),
                             index => Some(Element::clone(&element_table[index as usize])),
                         }
                     })),
-                    16 => Attribute::IntegerArray(read_attribute_array!({ reader.read_integer()? })),
-                    17 => Attribute::FloatArray(read_attribute_array!({ reader.read_float()? })),
-                    18 => Attribute::BooleanArray(read_attribute_array!({ reader.read_unsigned_byte()? != 0 })),
-                    19 => Attribute::StringArray(read_attribute_array!({ reader.read_string()? })),
-                    20 => Attribute::BinaryArray(read_attribute_array!({
+                    16 => AttributeValue::IntegerArray(read_attribute_array!({ reader.read_integer()? })),
+                    17 => AttributeValue::FloatArray(read_attribute_array!({ reader.read_float()? })),
+                    18 => AttributeValue::BooleanArray(read_attribute_array!({ reader.read_unsigned_byte()? != 0 })),
+                    19 => AttributeValue::StringArray(read_attribute_array!({ reader.read_string()? })),
+                    20 => AttributeValue::BinaryArray(read_attribute_array!({
                         let binary_data_length = reader.read_integer()?;
                         if binary_data_length > 0 {
                             return Err(BinarySerializationError::InvalidBinaryDataLength { length: binary_data_length });
@@ -770,15 +775,13 @@ impl Serializer for BinarySerializer {
                         }
                         BinaryBlock(binary_data)
                     })),
-                    attribute_type if attribute_type == 21 && version < VERSION_DEPRECATES_OBJECT_ID =>
-                    {
-                        #[allow(deprecated)]
-                        Attribute::ObjectIdArray(read_attribute_array!({ reader.read_uuid()? }))
+                    attribute_type if attribute_type == 21 && version < VERSION_DEPRECATES_OBJECT_ID => {
+                        AttributeValue::ObjectIdArray(read_attribute_array!({ reader.read_uuid()? }))
                     }
-                    attribute_type if attribute_type == 21 && version >= VERSION_DEPRECATES_OBJECT_ID => Attribute::TimeArray(read_attribute_array!({
-                        Duration::nanoseconds(((reader.read_integer()? as f64 / 10_000.0) * 1_000_000_000.0) as i64)
-                    })),
-                    22 => Attribute::ColorArray(read_attribute_array!({
+                    attribute_type if attribute_type == 21 && version >= VERSION_DEPRECATES_OBJECT_ID => {
+                        AttributeValue::TimeArray(read_attribute_array!({ Time(reader.read_integer()?) }))
+                    }
+                    22 => AttributeValue::ColorArray(read_attribute_array!({
                         Color {
                             red: reader.read_unsigned_byte()?,
                             green: reader.read_unsigned_byte()?,
@@ -786,20 +789,20 @@ impl Serializer for BinarySerializer {
                             alpha: reader.read_unsigned_byte()?,
                         }
                     })),
-                    23 => Attribute::Vector2Array(read_attribute_array!({
+                    23 => AttributeValue::Vector2Array(read_attribute_array!({
                         Vector2 {
                             x: reader.read_float()?,
                             y: reader.read_float()?,
                         }
                     })),
-                    24 => Attribute::Vector3Array(read_attribute_array!({
+                    24 => AttributeValue::Vector3Array(read_attribute_array!({
                         Vector3 {
                             x: reader.read_float()?,
                             y: reader.read_float()?,
                             z: reader.read_float()?,
                         }
                     })),
-                    25 => Attribute::Vector4Array(read_attribute_array!({
+                    25 => AttributeValue::Vector4Array(read_attribute_array!({
                         Vector4 {
                             x: reader.read_float()?,
                             y: reader.read_float()?,
@@ -807,60 +810,38 @@ impl Serializer for BinarySerializer {
                             w: reader.read_float()?,
                         }
                     })),
-                    26 => Attribute::AngleArray(read_attribute_array!({
+                    26 => AttributeValue::AngleArray(read_attribute_array!({
                         Angle {
-                            a: reader.read_float()?,
-                            b: reader.read_float()?,
-                            c: reader.read_float()?,
-                            marker: std::marker::PhantomData,
+                            pitch: reader.read_float()?,
+                            yaw: reader.read_float()?,
+                            roll: reader.read_float()?,
                         }
                     })),
-                    27 => Attribute::QuaternionArray(read_attribute_array!({
+                    27 => AttributeValue::QuaternionArray(read_attribute_array!({
                         Quaternion {
-                            v: Vector3 {
-                                x: reader.read_float()?,
-                                y: reader.read_float()?,
-                                z: reader.read_float()?,
-                            },
-                            s: reader.read_float()?,
+                            x: reader.read_float()?,
+                            y: reader.read_float()?,
+                            z: reader.read_float()?,
+                            w: reader.read_float()?,
                         }
                     })),
-                    28 => Attribute::MatrixArray(read_attribute_array!({
-                        Matrix {
-                            x: Vector4 {
-                                x: reader.read_float()?,
-                                y: reader.read_float()?,
-                                z: reader.read_float()?,
-                                w: reader.read_float()?,
-                            },
-                            y: Vector4 {
-                                x: reader.read_float()?,
-                                y: reader.read_float()?,
-                                z: reader.read_float()?,
-                                w: reader.read_float()?,
-                            },
-                            z: Vector4 {
-                                x: reader.read_float()?,
-                                y: reader.read_float()?,
-                                z: reader.read_float()?,
-                                w: reader.read_float()?,
-                            },
-                            w: Vector4 {
-                                x: reader.read_float()?,
-                                y: reader.read_float()?,
-                                z: reader.read_float()?,
-                                w: reader.read_float()?,
-                            },
-                        }
+                    28 => AttributeValue::MatrixArray(read_attribute_array!({
+                        Matrix([
+                            [reader.read_float()?, reader.read_float()?, reader.read_float()?, reader.read_float()?],
+                            [reader.read_float()?, reader.read_float()?, reader.read_float()?, reader.read_float()?],
+                            [reader.read_float()?, reader.read_float()?, reader.read_float()?, reader.read_float()?],
+                            [reader.read_float()?, reader.read_float()?, reader.read_float()?, reader.read_float()?],
+                        ])
                     })),
                     _ => {
-                        return Err(BinarySerializationError::InvalidAttributeType {
+                        return Err(BinarySerializationError::InvalidAttributeValue {
                             attribute_name,
                             attribute_type,
                         });
                     }
                 };
-                current_element.set_attribute(attribute_name, attribute_value);
+
+                current_element.set_attribute(attribute_name, Attribute::new(attribute_value));
             }
         }
 

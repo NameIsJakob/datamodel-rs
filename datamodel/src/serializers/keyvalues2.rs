@@ -1,21 +1,19 @@
 use std::io::{BufRead, Error as IOError, Write};
 
-use chrono::Duration;
 use indexmap::IndexMap;
 use thiserror::Error as ThisError;
 use uuid::Uuid as UUID;
 
 use crate::{
-    Element, Header, Serializer,
-    attribute::{Angle, Attribute, BinaryBlock, Color, Matrix, Quaternion, Vector2, Vector3, Vector4},
+    attribute::{Angle, Attribute, AttributeType, AttributeValue, BinaryBlock, Color, Matrix, Quaternion, Time, Vector2, Vector3, Vector4},
+    element::Element,
+    serializing::{Header, Serializer},
 };
 
 #[derive(Debug, ThisError)]
 pub enum KeyValues2SerializationError {
     #[error("IO Error: {0}")]
     Io(#[from] IOError),
-    #[error("Can't Serialize Deprecated Attribute")]
-    DeprecatedAttribute,
     #[error("Header Serializer Is Different")]
     WrongEncoding,
     #[error("Header Serializer Version Is Different")]
@@ -50,10 +48,14 @@ pub enum KeyValues2SerializationError {
     ParseBooleanError(usize, usize),
     #[error("Failed To Parse UUID At {0},{1}")]
     ParseUUIDError(usize, usize),
+    #[error("Time Value Out Of Range At {0},{1} - Min {min} Max {max}", min = Time(i32::MIN).as_seconds(), max = Time(i32::MAX).as_seconds())]
+    TimeAttributeOutOFRange(usize, usize),
     #[error("Invalid Id Attribute Type At {0},{1}")]
-    InvalidIdAttributeType(usize, usize),
-    #[error("Invalid Name Attribute Type At {0},{1}")]
     InvalidNameAttributeType(usize, usize),
+    #[error("Attribute \"name\" In Element \"{}\" Is Not Type String", element.get_id())]
+    InvalidNameAttribute { element: Element },
+    #[error("Attribute \"id\" In Element \"{}\" Can't Be Type ObjectId", element.get_id())]
+    InvalidIdAttribute { element: Element },
     #[error("Element Generated With Existing Id")]
     DuplicateGeneratedElementId,
     #[error("Element Id \"{0}\" Already Exists")]
@@ -141,8 +143,16 @@ impl<T: Write> StringWriter<T> {
         for (name, attribute) in root.get_attributes().iter() {
             let attribute_type_name = Self::get_attribute_type_name(attribute);
 
-            match attribute {
-                Attribute::Element(element) => {
+            if name == "name" && attribute.get_type() != AttributeType::String {
+                return Err(KeyValues2SerializationError::InvalidNameAttribute { element: Element::clone(root) });
+            }
+
+            if name == "id" && attribute.get_type() == AttributeType::ObjectId {
+                return Err(KeyValues2SerializationError::InvalidIdAttribute { element: Element::clone(root) });
+            }
+
+            match &*attribute.get_inner() {
+                AttributeValue::Element(element) => {
                     if let Some(element) = element {
                         let &count = collected_elements.get(element).unwrap();
 
@@ -154,7 +164,6 @@ impl<T: Write> StringWriter<T> {
                         write_attribute_string!(self, name, self.format_escape_characters(&element.get_class()))?;
                         self.write_open_brace()?;
                         write_attribute_string!(self, "id", "elementid", element.get_id())?;
-                        write_attribute_string!(self, "name", "string", self.format_escape_characters(&element.get_name()))?;
                         self.write_attributes(element, collected_elements)?;
                         self.write_close_brace()?;
                         self.write_line("")?;
@@ -164,11 +173,11 @@ impl<T: Write> StringWriter<T> {
 
                     write_attribute_string!(self, name, attribute_type_name, "")?;
                 }
-                Attribute::Integer(integer) => write_attribute_string!(self, name, attribute_type_name, integer)?,
-                Attribute::Float(float) => write_attribute_string!(self, name, attribute_type_name, float)?,
-                Attribute::Boolean(boolean) => write_attribute_string!(self, name, attribute_type_name, *boolean as u8)?,
-                Attribute::String(string) => write_attribute_string!(self, name, attribute_type_name, self.format_escape_characters(string))?,
-                Attribute::Binary(binary) => {
+                AttributeValue::Integer(integer) => write_attribute_string!(self, name, attribute_type_name, integer)?,
+                AttributeValue::Float(float) => write_attribute_string!(self, name, attribute_type_name, float)?,
+                AttributeValue::Boolean(boolean) => write_attribute_string!(self, name, attribute_type_name, *boolean as u8)?,
+                AttributeValue::String(string) => write_attribute_string!(self, name, attribute_type_name, self.format_escape_characters(string))?,
+                AttributeValue::Binary(binary) => {
                     write_attribute_string!(self, name, attribute_type_name)?;
                     self.write_line("\"")?;
                     self.tab_index += 1;
@@ -186,40 +195,45 @@ impl<T: Write> StringWriter<T> {
                     self.tab_index -= 1;
                     self.write_line("\"")?;
                 }
-                Attribute::Time(time) => write_attribute_string!(self, name, attribute_type_name, time.as_seconds_f64())?,
-                Attribute::Color(color) => write_attribute_string!(
+                AttributeValue::ObjectId(uuid) => write_attribute_string!(self, name, attribute_type_name, uuid)?,
+                AttributeValue::Time(time) => write_attribute_string!(self, name, attribute_type_name, format!("{:.4}", time.as_seconds()))?,
+                AttributeValue::Color(color) => write_attribute_string!(
                     self,
                     name,
                     attribute_type_name,
                     format!("{} {} {} {}", color.red, color.green, color.blue, color.alpha)
                 )?,
-                Attribute::Vector2(vector2) => write_attribute_string!(self, name, attribute_type_name, format!("{} {}", vector2.x, vector2.y))?,
-                Attribute::Vector3(vector3) => write_attribute_string!(self, name, attribute_type_name, format!("{} {} {}", vector3.x, vector3.y, vector3.z))?,
-                Attribute::Vector4(vector4) => write_attribute_string!(
+                AttributeValue::Vector2(vector2) => write_attribute_string!(self, name, attribute_type_name, format!("{} {}", vector2.x, vector2.y))?,
+                AttributeValue::Vector3(vector3) => {
+                    write_attribute_string!(self, name, attribute_type_name, format!("{} {} {}", vector3.x, vector3.y, vector3.z))?
+                }
+                AttributeValue::Vector4(vector4) => write_attribute_string!(
                     self,
                     name,
                     attribute_type_name,
                     format!("{} {} {} {}", vector4.x, vector4.y, vector4.z, vector4.w)
                 )?,
-                Attribute::Angle(angle) => write_attribute_string!(self, name, attribute_type_name, format!("{} {} {}", angle.a, angle.b, angle.c))?,
-                Attribute::Quaternion(quaternion) => write_attribute_string!(
+                AttributeValue::Angle(angle) => {
+                    write_attribute_string!(self, name, attribute_type_name, format!("{} {} {}", angle.pitch, angle.yaw, angle.roll))?
+                }
+                AttributeValue::Quaternion(quaternion) => write_attribute_string!(
                     self,
                     name,
                     attribute_type_name,
-                    format!("{} {} {} {}", quaternion.v.x, quaternion.v.y, quaternion.v.z, quaternion.s)
+                    format!("{} {} {} {}", quaternion.x, quaternion.y, quaternion.z, quaternion.w)
                 )?,
-                Attribute::Matrix(matrix) => {
+                AttributeValue::Matrix(matrix) => {
                     write_attribute_string!(self, name, attribute_type_name)?;
                     self.write_line("\"")?;
                     self.tab_index += 1;
-                    self.write_line(&format!("{} {} {} {}", matrix.x.x, matrix.x.y, matrix.x.z, matrix.x.w))?;
-                    self.write_line(&format!("{} {} {} {}", matrix.y.x, matrix.y.y, matrix.y.z, matrix.y.w))?;
-                    self.write_line(&format!("{} {} {} {}", matrix.z.x, matrix.z.y, matrix.z.z, matrix.z.w))?;
-                    self.write_line(&format!("{} {} {} {}", matrix.w.x, matrix.w.y, matrix.w.z, matrix.w.w))?;
+                    self.write_line(&format!("{} {} {} {}", matrix.0[0][0], matrix.0[0][1], matrix.0[0][2], matrix.0[0][3]))?;
+                    self.write_line(&format!("{} {} {} {}", matrix.0[1][0], matrix.0[1][1], matrix.0[1][2], matrix.0[1][3]))?;
+                    self.write_line(&format!("{} {} {} {}", matrix.0[2][0], matrix.0[2][1], matrix.0[2][2], matrix.0[2][3]))?;
+                    self.write_line(&format!("{} {} {} {}", matrix.0[3][0], matrix.0[3][1], matrix.0[3][2], matrix.0[3][3]))?;
                     self.tab_index -= 1;
                     self.write_line("\"")?;
                 }
-                Attribute::ElementArray(elements) => {
+                AttributeValue::ElementArray(elements) => {
                     write_attribute_string!(self, name, attribute_type_name)?;
                     self.write_open_bracket()?;
                     if let Some((last_element, elements)) = elements.split_last() {
@@ -235,7 +249,6 @@ impl<T: Write> StringWriter<T> {
                                 self.write_line(&format!("\"{}\"", self.format_escape_characters(&element.get_class())))?;
                                 self.write_open_brace()?;
                                 write_attribute_string!(self, "id", "elementid", element.get_id())?;
-                                write_attribute_string!(self, "name", "string", self.format_escape_characters(&element.get_name()))?;
                                 self.write_attributes(element, collected_elements)?;
                                 self.tab_index -= 1;
                                 self.write_line("},")?;
@@ -255,7 +268,6 @@ impl<T: Write> StringWriter<T> {
                                 self.write_line(&format!("\"{}\"", self.format_escape_characters(&element.get_class())))?;
                                 self.write_open_brace()?;
                                 write_attribute_string!(self, "id", "elementid", element.get_id())?;
-                                write_attribute_string!(self, "name", "string", self.format_escape_characters(&element.get_name()))?;
                                 self.write_attributes(element, collected_elements)?;
                                 self.write_close_brace()?;
                             }
@@ -265,7 +277,7 @@ impl<T: Write> StringWriter<T> {
                     }
                     self.write_close_bracket()?;
                 }
-                Attribute::IntegerArray(integers) => {
+                AttributeValue::IntegerArray(integers) => {
                     write_attribute_string!(self, name, attribute_type_name)?;
                     self.write_open_bracket()?;
                     if let Some((last_integer, integers)) = integers.split_last() {
@@ -276,7 +288,7 @@ impl<T: Write> StringWriter<T> {
                     }
                     self.write_close_bracket()?;
                 }
-                Attribute::FloatArray(floats) => {
+                AttributeValue::FloatArray(floats) => {
                     write_attribute_string!(self, name, attribute_type_name)?;
                     self.write_open_bracket()?;
                     if let Some((last_float, floats)) = floats.split_last() {
@@ -287,7 +299,7 @@ impl<T: Write> StringWriter<T> {
                     }
                     self.write_close_bracket()?;
                 }
-                Attribute::BooleanArray(booleans) => {
+                AttributeValue::BooleanArray(booleans) => {
                     write_attribute_string!(self, name, attribute_type_name)?;
                     self.write_open_bracket()?;
                     if let Some((last_boolean, booleans)) = booleans.split_last() {
@@ -298,7 +310,7 @@ impl<T: Write> StringWriter<T> {
                     }
                     self.write_close_bracket()?;
                 }
-                Attribute::StringArray(strings) => {
+                AttributeValue::StringArray(strings) => {
                     write_attribute_string!(self, name, attribute_type_name)?;
                     self.write_open_bracket()?;
                     if let Some((last_string, strings)) = strings.split_last() {
@@ -309,7 +321,7 @@ impl<T: Write> StringWriter<T> {
                     }
                     self.write_close_bracket()?;
                 }
-                Attribute::BinaryArray(binaries) => {
+                AttributeValue::BinaryArray(binaries) => {
                     write_attribute_string!(self, name, attribute_type_name)?;
                     self.write_open_bracket()?;
                     if let Some((last_binary, binaries)) = binaries.split_last() {
@@ -348,18 +360,29 @@ impl<T: Write> StringWriter<T> {
                     }
                     self.write_close_bracket()?;
                 }
-                Attribute::TimeArray(times) => {
+                AttributeValue::ObjectIdArray(uuids) => {
+                    write_attribute_string!(self, name, attribute_type_name)?;
+                    self.write_open_bracket()?;
+                    if let Some((last_uuid, uuids)) = uuids.split_last() {
+                        for uuid in uuids {
+                            self.write_line(&format!("\"{uuid}\","))?;
+                        }
+                        self.write_line(&format!("\"{last_uuid}\""))?;
+                    }
+                    self.write_close_bracket()?;
+                }
+                AttributeValue::TimeArray(times) => {
                     write_attribute_string!(self, name, attribute_type_name)?;
                     self.write_open_bracket()?;
                     if let Some((last_time, times)) = times.split_last() {
                         for time in times {
-                            self.write_line(&format!("\"{}\",", time.as_seconds_f64()))?;
+                            self.write_line(&format!("\"{:.4}\",", time.as_seconds()))?;
                         }
-                        self.write_line(&format!("\"{}\"", last_time.as_seconds_f64()))?;
+                        self.write_line(&format!("\"{:.4}\"", last_time.as_seconds()))?;
                     }
                     self.write_close_bracket()?;
                 }
-                Attribute::ColorArray(colors) => {
+                AttributeValue::ColorArray(colors) => {
                     write_attribute_string!(self, name, attribute_type_name)?;
                     self.write_open_bracket()?;
                     if let Some((last_color, colors)) = colors.split_last() {
@@ -370,7 +393,7 @@ impl<T: Write> StringWriter<T> {
                     }
                     self.write_close_bracket()?;
                 }
-                Attribute::Vector2Array(vector2s) => {
+                AttributeValue::Vector2Array(vector2s) => {
                     write_attribute_string!(self, name, attribute_type_name)?;
                     self.write_open_bracket()?;
                     if let Some((last_vector2, vector2s)) = vector2s.split_last() {
@@ -381,7 +404,7 @@ impl<T: Write> StringWriter<T> {
                     }
                     self.write_close_bracket()?;
                 }
-                Attribute::Vector3Array(vector3s) => {
+                AttributeValue::Vector3Array(vector3s) => {
                     write_attribute_string!(self, name, attribute_type_name)?;
                     self.write_open_bracket()?;
                     if let Some((last_vector3, vector3s)) = vector3s.split_last() {
@@ -392,7 +415,7 @@ impl<T: Write> StringWriter<T> {
                     }
                     self.write_close_bracket()?;
                 }
-                Attribute::Vector4Array(vector4s) => {
+                AttributeValue::Vector4Array(vector4s) => {
                     write_attribute_string!(self, name, attribute_type_name)?;
                     self.write_open_bracket()?;
                     if let Some((last_vector4, vector4s)) = vector4s.split_last() {
@@ -403,96 +426,105 @@ impl<T: Write> StringWriter<T> {
                     }
                     self.write_close_bracket()?;
                 }
-                Attribute::AngleArray(angles) => {
+                AttributeValue::AngleArray(angles) => {
                     write_attribute_string!(self, name, attribute_type_name)?;
                     self.write_open_bracket()?;
                     if let Some((last_angle, angles)) = angles.split_last() {
                         for angle in angles {
-                            self.write_line(&format!("\"{} {} {}\",", angle.a, angle.b, angle.c))?;
+                            self.write_line(&format!("\"{} {} {}\",", angle.pitch, angle.yaw, angle.roll))?;
                         }
-                        self.write_line(&format!("\"{} {} {}\"", last_angle.a, last_angle.b, last_angle.c))?;
+                        self.write_line(&format!("\"{} {} {}\"", last_angle.pitch, last_angle.yaw, last_angle.roll))?;
                     }
                     self.write_close_bracket()?;
                 }
-                Attribute::QuaternionArray(quaternions) => {
+                AttributeValue::QuaternionArray(quaternions) => {
                     write_attribute_string!(self, name, attribute_type_name)?;
                     self.write_open_bracket()?;
                     if let Some((last_quaternion, quaternions)) = quaternions.split_last() {
                         for quaternion in quaternions {
-                            self.write_line(&format!("\"{} {} {} {}\",", quaternion.v.x, quaternion.v.y, quaternion.v.z, quaternion.s))?;
+                            self.write_line(&format!("\"{} {} {} {}\",", quaternion.x, quaternion.y, quaternion.z, quaternion.w))?;
                         }
                         self.write_line(&format!(
                             "\"{} {} {} {}\"",
-                            last_quaternion.v.x, last_quaternion.v.y, last_quaternion.v.z, last_quaternion.s
+                            last_quaternion.x, last_quaternion.y, last_quaternion.z, last_quaternion.w
                         ))?;
                     }
                     self.write_close_bracket()?;
                 }
-                Attribute::MatrixArray(matrixes) => {
+                AttributeValue::MatrixArray(matrixes) => {
                     write_attribute_string!(self, name, attribute_type_name)?;
                     self.write_open_bracket()?;
                     if let Some((last_matrix, matrixes)) = matrixes.split_last() {
                         for matrix in matrixes {
                             self.write_line("\"")?;
                             self.tab_index += 1;
-                            self.write_line(&format!("{} {} {} {}", matrix.x.x, matrix.x.y, matrix.x.z, matrix.x.w))?;
-                            self.write_line(&format!("{} {} {} {}", matrix.y.x, matrix.y.y, matrix.y.z, matrix.y.w))?;
-                            self.write_line(&format!("{} {} {} {}", matrix.z.x, matrix.z.y, matrix.z.z, matrix.z.w))?;
-                            self.write_line(&format!("{} {} {} {}", matrix.w.x, matrix.w.y, matrix.w.z, matrix.w.w))?;
+                            self.write_line(&format!("{} {} {} {}", matrix.0[0][0], matrix.0[0][1], matrix.0[0][2], matrix.0[0][3]))?;
+                            self.write_line(&format!("{} {} {} {}", matrix.0[1][0], matrix.0[1][1], matrix.0[1][2], matrix.0[1][3]))?;
+                            self.write_line(&format!("{} {} {} {}", matrix.0[2][0], matrix.0[2][1], matrix.0[2][2], matrix.0[2][3]))?;
+                            self.write_line(&format!("{} {} {} {}", matrix.0[3][0], matrix.0[3][1], matrix.0[3][2], matrix.0[3][3]))?;
                             self.tab_index -= 1;
                             self.write_line("\",")?;
                         }
                         self.write_line("\"")?;
                         self.tab_index += 1;
-                        self.write_line(&format!("{} {} {} {}", last_matrix.x.x, last_matrix.x.y, last_matrix.x.z, last_matrix.x.w))?;
-                        self.write_line(&format!("{} {} {} {}", last_matrix.y.x, last_matrix.y.y, last_matrix.y.z, last_matrix.y.w))?;
-                        self.write_line(&format!("{} {} {} {}", last_matrix.z.x, last_matrix.z.y, last_matrix.z.z, last_matrix.z.w))?;
-                        self.write_line(&format!("{} {} {} {}", last_matrix.w.x, last_matrix.w.y, last_matrix.w.z, last_matrix.w.w))?;
+                        self.write_line(&format!(
+                            "{} {} {} {}",
+                            last_matrix.0[0][0], last_matrix.0[0][1], last_matrix.0[0][2], last_matrix.0[0][3]
+                        ))?;
+                        self.write_line(&format!(
+                            "{} {} {} {}",
+                            last_matrix.0[1][0], last_matrix.0[1][1], last_matrix.0[1][2], last_matrix.0[1][3]
+                        ))?;
+                        self.write_line(&format!(
+                            "{} {} {} {}",
+                            last_matrix.0[2][0], last_matrix.0[2][1], last_matrix.0[2][2], last_matrix.0[2][3]
+                        ))?;
+                        self.write_line(&format!(
+                            "{} {} {} {}",
+                            last_matrix.0[3][0], last_matrix.0[3][1], last_matrix.0[3][2], last_matrix.0[3][3]
+                        ))?;
                         self.tab_index -= 1;
                         self.write_line("\"")?;
                     }
                     self.write_close_bracket()?;
                 }
-                _ => return Err(KeyValues2SerializationError::DeprecatedAttribute),
             }
         }
         Ok(())
     }
 
     fn get_attribute_type_name(attribute: &Attribute) -> &'static str {
-        match attribute {
-            Attribute::Element(_) => "element",
-            Attribute::Integer(_) => "int",
-            Attribute::Float(_) => "float",
-            Attribute::Boolean(_) => "bool",
-            Attribute::String(_) => "string",
-            Attribute::Binary(_) => "binary",
-            #[allow(deprecated)]
-            Attribute::ObjectId(_) => "elementid",
-            Attribute::Time(_) => "time",
-            Attribute::Color(_) => "color",
-            Attribute::Vector2(_) => "vector2",
-            Attribute::Vector3(_) => "vector3",
-            Attribute::Vector4(_) => "vector4",
-            Attribute::Angle(_) => "qangle",
-            Attribute::Quaternion(_) => "quaternion",
-            Attribute::Matrix(_) => "matrix",
-            Attribute::ElementArray(_) => "element_array",
-            Attribute::IntegerArray(_) => "int_array",
-            Attribute::FloatArray(_) => "float_array",
-            Attribute::BooleanArray(_) => "bool_array",
-            Attribute::StringArray(_) => "string_array",
-            Attribute::BinaryArray(_) => "binary_array",
-            #[allow(deprecated)]
-            Attribute::ObjectIdArray(_) => "elementid_array",
-            Attribute::TimeArray(_) => "time_array",
-            Attribute::ColorArray(_) => "color_array",
-            Attribute::Vector2Array(_) => "vector2_array",
-            Attribute::Vector3Array(_) => "vector3_array",
-            Attribute::Vector4Array(_) => "vector4_array",
-            Attribute::AngleArray(_) => "qangle_array",
-            Attribute::QuaternionArray(_) => "quaternion_array",
-            Attribute::MatrixArray(_) => "matrix_array",
+        match attribute.get_type() {
+            AttributeType::Element => "element",
+            AttributeType::Integer => "int",
+            AttributeType::Float => "float",
+            AttributeType::Boolean => "bool",
+            AttributeType::String => "string",
+            AttributeType::Binary => "binary",
+            AttributeType::ObjectId => "elementid",
+            AttributeType::Time => "time",
+            AttributeType::Color => "color",
+            AttributeType::Vector2 => "vector2",
+            AttributeType::Vector3 => "vector3",
+            AttributeType::Vector4 => "vector4",
+            AttributeType::Angle => "qangle",
+            AttributeType::Quaternion => "quaternion",
+            AttributeType::Matrix => "matrix",
+            AttributeType::ElementArray => "element_array",
+            AttributeType::IntegerArray => "int_array",
+            AttributeType::FloatArray => "float_array",
+            AttributeType::BooleanArray => "bool_array",
+            AttributeType::StringArray => "string_array",
+            AttributeType::BinaryArray => "binary_array",
+            AttributeType::ObjectIdArray => "elementid_array",
+            AttributeType::TimeArray => "time_array",
+            AttributeType::ColorArray => "color_array",
+            AttributeType::Vector2Array => "vector2_array",
+            AttributeType::Vector3Array => "vector3_array",
+            AttributeType::Vector4Array => "vector4_array",
+            AttributeType::AngleArray => "qangle_array",
+            AttributeType::QuaternionArray => "quaternion_array",
+            AttributeType::MatrixArray => "matrix_array",
         }
     }
 
@@ -701,7 +733,9 @@ impl<T: BufRead> StringReader<T> {
                                     }
                                     return Err(KeyValues2SerializationError::UnknownEscapeCharacter(escape_character, self.line, self.column));
                                 }
-                                None => return Err(KeyValues2SerializationError::UnfinishedEscapeCharacter(self.line, self.column)),
+                                None => {
+                                    return Err(KeyValues2SerializationError::UnfinishedEscapeCharacter(self.line, self.column));
+                                }
                             }
                             self.column += 1;
                             continue;
@@ -753,14 +787,22 @@ impl<T: BufRead> StringReader<T> {
     ) -> Result<Option<Element>, KeyValues2SerializationError> {
         let element_class = match self.next_token()? {
             Some(ReadToken::String(string_token)) => string_token,
-            Some(ReadToken::OpenBrace) => return Err(KeyValues2SerializationError::UnexpectedOpenBrace(self.line, self.column)),
-            Some(ReadToken::CloseBrace) => return Err(KeyValues2SerializationError::UnexpectedCloseBrace(self.line, self.column)),
-            Some(ReadToken::OpenBracket) => return Err(KeyValues2SerializationError::UnexpectedOpenBracket(self.line, self.column)),
-            Some(ReadToken::CloseBracket) => return Err(KeyValues2SerializationError::UnexpectedCloseBracket(self.line, self.column)),
+            Some(ReadToken::OpenBrace) => {
+                return Err(KeyValues2SerializationError::UnexpectedOpenBrace(self.line, self.column));
+            }
+            Some(ReadToken::CloseBrace) => {
+                return Err(KeyValues2SerializationError::UnexpectedCloseBrace(self.line, self.column));
+            }
+            Some(ReadToken::OpenBracket) => {
+                return Err(KeyValues2SerializationError::UnexpectedOpenBracket(self.line, self.column));
+            }
+            Some(ReadToken::CloseBracket) => {
+                return Err(KeyValues2SerializationError::UnexpectedCloseBracket(self.line, self.column));
+            }
             None => return Ok(None),
         };
 
-        let mut element = Element::create(String::new(), element_class);
+        let mut element = Element::new(element_class);
         if collected_elements.insert(*element.get_id(), Element::clone(&element)).is_some() {
             return Err(KeyValues2SerializationError::DuplicateGeneratedElementId);
         }
@@ -783,34 +825,56 @@ impl<T: BufRead> StringReader<T> {
         loop {
             let attribute_name = match self.next_token()?.ok_or(KeyValues2SerializationError::UnexpectedEndOfFile)? {
                 ReadToken::String(string_token) => string_token,
-                ReadToken::OpenBrace => return Err(KeyValues2SerializationError::UnexpectedOpenBrace(self.line, self.column)),
+                ReadToken::OpenBrace => {
+                    return Err(KeyValues2SerializationError::UnexpectedOpenBrace(self.line, self.column));
+                }
                 ReadToken::CloseBrace => return Ok(()),
-                ReadToken::OpenBracket => return Err(KeyValues2SerializationError::UnexpectedOpenBracket(self.line, self.column)),
-                ReadToken::CloseBracket => return Err(KeyValues2SerializationError::UnexpectedCloseBracket(self.line, self.column)),
+                ReadToken::OpenBracket => {
+                    return Err(KeyValues2SerializationError::UnexpectedOpenBracket(self.line, self.column));
+                }
+                ReadToken::CloseBracket => {
+                    return Err(KeyValues2SerializationError::UnexpectedCloseBracket(self.line, self.column));
+                }
             };
 
             let attribute_type = match self.next_token()?.ok_or(KeyValues2SerializationError::UnexpectedEndOfFile)? {
                 ReadToken::String(string_token) => string_token,
-                ReadToken::OpenBrace => return Err(KeyValues2SerializationError::UnexpectedOpenBrace(self.line, self.column)),
-                ReadToken::CloseBrace => return Err(KeyValues2SerializationError::UnexpectedCloseBrace(self.line, self.column)),
-                ReadToken::OpenBracket => return Err(KeyValues2SerializationError::UnexpectedOpenBracket(self.line, self.column)),
-                ReadToken::CloseBracket => return Err(KeyValues2SerializationError::UnexpectedCloseBracket(self.line, self.column)),
+                ReadToken::OpenBrace => {
+                    return Err(KeyValues2SerializationError::UnexpectedOpenBrace(self.line, self.column));
+                }
+                ReadToken::CloseBrace => {
+                    return Err(KeyValues2SerializationError::UnexpectedCloseBrace(self.line, self.column));
+                }
+                ReadToken::OpenBracket => {
+                    return Err(KeyValues2SerializationError::UnexpectedOpenBracket(self.line, self.column));
+                }
+                ReadToken::CloseBracket => {
+                    return Err(KeyValues2SerializationError::UnexpectedCloseBracket(self.line, self.column));
+                }
             };
 
-            if attribute_name == "id" {
-                if attribute_type != "elementid" {
-                    return Err(KeyValues2SerializationError::InvalidIdAttributeType(
-                        self.line,
-                        self.column.saturating_sub(attribute_type.len().saturating_sub(1)),
-                    ));
-                }
+            if attribute_name == "name" && attribute_type != "string" {
+                return Err(KeyValues2SerializationError::InvalidNameAttributeType(
+                    self.line,
+                    self.column.saturating_sub(attribute_type.len().saturating_sub(1)),
+                ));
+            }
 
+            if attribute_name == "id" && attribute_type == "elementid" {
                 let attribute_value = match self.next_token()?.ok_or(KeyValues2SerializationError::UnexpectedEndOfFile)? {
                     ReadToken::String(string_token) => string_token,
-                    ReadToken::OpenBrace => return Err(KeyValues2SerializationError::UnexpectedOpenBrace(self.line, self.column)),
-                    ReadToken::CloseBrace => return Err(KeyValues2SerializationError::UnexpectedCloseBrace(self.line, self.column)),
-                    ReadToken::OpenBracket => return Err(KeyValues2SerializationError::UnexpectedOpenBracket(self.line, self.column)),
-                    ReadToken::CloseBracket => return Err(KeyValues2SerializationError::UnexpectedCloseBracket(self.line, self.column)),
+                    ReadToken::OpenBrace => {
+                        return Err(KeyValues2SerializationError::UnexpectedOpenBrace(self.line, self.column));
+                    }
+                    ReadToken::CloseBrace => {
+                        return Err(KeyValues2SerializationError::UnexpectedCloseBrace(self.line, self.column));
+                    }
+                    ReadToken::OpenBracket => {
+                        return Err(KeyValues2SerializationError::UnexpectedOpenBracket(self.line, self.column));
+                    }
+                    ReadToken::CloseBracket => {
+                        return Err(KeyValues2SerializationError::UnexpectedCloseBracket(self.line, self.column));
+                    }
                 };
 
                 let element_id = attribute_value.parse::<UUID>().map_err(|_| {
@@ -831,47 +895,35 @@ impl<T: BufRead> StringReader<T> {
                 continue;
             }
 
-            if attribute_name == "name" {
-                if attribute_type != "string" {
-                    return Err(KeyValues2SerializationError::InvalidNameAttributeType(
-                        self.line,
-                        self.column.saturating_sub(attribute_type.len().saturating_sub(1)),
-                    ));
-                }
-
-                let attribute_value = match self.next_token()?.ok_or(KeyValues2SerializationError::UnexpectedEndOfFile)? {
-                    ReadToken::String(string_token) => string_token,
-                    ReadToken::OpenBrace => return Err(KeyValues2SerializationError::UnexpectedOpenBrace(self.line, self.column)),
-                    ReadToken::CloseBrace => return Err(KeyValues2SerializationError::UnexpectedCloseBrace(self.line, self.column)),
-                    ReadToken::OpenBracket => return Err(KeyValues2SerializationError::UnexpectedOpenBracket(self.line, self.column)),
-                    ReadToken::CloseBracket => return Err(KeyValues2SerializationError::UnexpectedCloseBracket(self.line, self.column)),
-                };
-
-                element.set_name(attribute_value);
-                continue;
-            }
-
             if let Some(attribute) = self.read_attribute_value(&attribute_type)? {
-                element.set_attribute(attribute_name, attribute);
+                element.set_attribute(attribute_name, Attribute::new(attribute));
                 continue;
             }
 
             if let Some(array_attribute) = self.read_attribute_array(&attribute_type)? {
-                element.set_attribute(attribute_name, array_attribute);
+                element.set_attribute(attribute_name, Attribute::new(array_attribute));
                 continue;
             }
 
             if attribute_type == "element" {
                 let attribute_value = match self.next_token()?.ok_or(KeyValues2SerializationError::UnexpectedEndOfFile)? {
                     ReadToken::String(string_token) => string_token,
-                    ReadToken::OpenBrace => return Err(KeyValues2SerializationError::UnexpectedOpenBrace(self.line, self.column)),
-                    ReadToken::CloseBrace => return Err(KeyValues2SerializationError::UnexpectedCloseBrace(self.line, self.column)),
-                    ReadToken::OpenBracket => return Err(KeyValues2SerializationError::UnexpectedOpenBracket(self.line, self.column)),
-                    ReadToken::CloseBracket => return Err(KeyValues2SerializationError::UnexpectedCloseBracket(self.line, self.column)),
+                    ReadToken::OpenBrace => {
+                        return Err(KeyValues2SerializationError::UnexpectedOpenBrace(self.line, self.column));
+                    }
+                    ReadToken::CloseBrace => {
+                        return Err(KeyValues2SerializationError::UnexpectedCloseBrace(self.line, self.column));
+                    }
+                    ReadToken::OpenBracket => {
+                        return Err(KeyValues2SerializationError::UnexpectedOpenBracket(self.line, self.column));
+                    }
+                    ReadToken::CloseBracket => {
+                        return Err(KeyValues2SerializationError::UnexpectedCloseBracket(self.line, self.column));
+                    }
                 };
 
                 if attribute_value.is_empty() {
-                    element.set_attribute(attribute_name, Attribute::Element(None));
+                    element.set_attribute(attribute_name, Attribute::new(AttributeValue::Element(None)));
                     continue;
                 }
 
@@ -884,7 +936,7 @@ impl<T: BufRead> StringReader<T> {
                     .or_default()
                     .push((attribute_name.clone(), ElementAttributeRemap::Single(element_id)));
 
-                element.set_attribute(attribute_name, Attribute::Element(None));
+                element.set_attribute(attribute_name, Attribute::new(AttributeValue::Element(None)));
                 continue;
             }
 
@@ -899,9 +951,15 @@ impl<T: BufRead> StringReader<T> {
                 loop {
                     let attribute_value = match self.next_token()?.ok_or(KeyValues2SerializationError::UnexpectedEndOfFile)? {
                         ReadToken::String(string_token) => string_token,
-                        ReadToken::OpenBrace => return Err(KeyValues2SerializationError::UnexpectedOpenBrace(self.line, self.column)),
-                        ReadToken::CloseBrace => return Err(KeyValues2SerializationError::UnexpectedCloseBrace(self.line, self.column)),
-                        ReadToken::OpenBracket => return Err(KeyValues2SerializationError::UnexpectedOpenBracket(self.line, self.column)),
+                        ReadToken::OpenBrace => {
+                            return Err(KeyValues2SerializationError::UnexpectedOpenBrace(self.line, self.column));
+                        }
+                        ReadToken::CloseBrace => {
+                            return Err(KeyValues2SerializationError::UnexpectedCloseBrace(self.line, self.column));
+                        }
+                        ReadToken::OpenBracket => {
+                            return Err(KeyValues2SerializationError::UnexpectedOpenBracket(self.line, self.column));
+                        }
                         ReadToken::CloseBracket => break,
                     };
 
@@ -929,9 +987,15 @@ impl<T: BufRead> StringReader<T> {
                         ReadToken::OpenBrace => {
                             elements.push(Some(self.read_element_attribute(attribute_value, collected_elements, element_remap)?));
                         }
-                        ReadToken::CloseBrace => return Err(KeyValues2SerializationError::UnexpectedCloseBrace(self.line, self.column)),
-                        ReadToken::OpenBracket => return Err(KeyValues2SerializationError::UnexpectedOpenBracket(self.line, self.column)),
-                        ReadToken::CloseBracket => return Err(KeyValues2SerializationError::UnexpectedCloseBracket(self.line, self.column)),
+                        ReadToken::CloseBrace => {
+                            return Err(KeyValues2SerializationError::UnexpectedCloseBrace(self.line, self.column));
+                        }
+                        ReadToken::OpenBracket => {
+                            return Err(KeyValues2SerializationError::UnexpectedOpenBracket(self.line, self.column));
+                        }
+                        ReadToken::CloseBracket => {
+                            return Err(KeyValues2SerializationError::UnexpectedCloseBracket(self.line, self.column));
+                        }
                     };
                 }
 
@@ -942,7 +1006,7 @@ impl<T: BufRead> StringReader<T> {
                         .push((attribute_name.clone(), ElementAttributeRemap::Array(remaps)));
                 }
 
-                element.set_attribute(attribute_name, Attribute::ElementArray(elements));
+                element.set_attribute(attribute_name, Attribute::new(AttributeValue::ElementArray(elements)));
                 continue;
             }
 
@@ -952,23 +1016,25 @@ impl<T: BufRead> StringReader<T> {
 
             element.set_attribute(
                 attribute_name,
-                Attribute::Element(Some(self.read_element_attribute(attribute_type, collected_elements, element_remap)?)),
+                Attribute::new(AttributeValue::Element(Some(self.read_element_attribute(
+                    attribute_type,
+                    collected_elements,
+                    element_remap,
+                )?))),
             );
         }
     }
 
-    fn read_attribute_array(&mut self, attribute_type: &str) -> Result<Option<Attribute>, KeyValues2SerializationError> {
+    fn read_attribute_array(&mut self, attribute_type: &str) -> Result<Option<AttributeValue>, KeyValues2SerializationError> {
         macro_rules! parse_array_attribute {
             ($self:ident, $match_variant:path, $single_type:expr, $result_variant:path) => {
                 if !matches!($self.next_token()?, Some(ReadToken::OpenBracket)) {
                     return Err(KeyValues2SerializationError::ExpectedOpenBracket($self.line, $self.column));
                 } else {
                     let mut array = Vec::new();
-                    #[allow(deprecated)]
                     while let Some($match_variant(value)) = self.read_attribute_value($single_type)? {
                         array.push(value);
                     }
-                    #[allow(deprecated)]
                     Some($result_variant(array))
                 }
             };
@@ -976,52 +1042,52 @@ impl<T: BufRead> StringReader<T> {
 
         Ok(match attribute_type {
             "int_array" => {
-                parse_array_attribute!(self, Attribute::Integer, "int", Attribute::IntegerArray)
+                parse_array_attribute!(self, AttributeValue::Integer, "int", AttributeValue::IntegerArray)
             }
             "float_array" => {
-                parse_array_attribute!(self, Attribute::Float, "float", Attribute::FloatArray)
+                parse_array_attribute!(self, AttributeValue::Float, "float", AttributeValue::FloatArray)
             }
             "bool_array" => {
-                parse_array_attribute!(self, Attribute::Boolean, "bool", Attribute::BooleanArray)
+                parse_array_attribute!(self, AttributeValue::Boolean, "bool", AttributeValue::BooleanArray)
             }
             "string_array" => {
-                parse_array_attribute!(self, Attribute::String, "string", Attribute::StringArray)
+                parse_array_attribute!(self, AttributeValue::String, "string", AttributeValue::StringArray)
             }
             "binary_array" => {
-                parse_array_attribute!(self, Attribute::Binary, "binary", Attribute::BinaryArray)
+                parse_array_attribute!(self, AttributeValue::Binary, "binary", AttributeValue::BinaryArray)
             }
             "elementid_array" => {
-                parse_array_attribute!(self, Attribute::ObjectId, "elementid", Attribute::ObjectIdArray)
+                parse_array_attribute!(self, AttributeValue::ObjectId, "elementid", AttributeValue::ObjectIdArray)
             }
             "time_array" => {
-                parse_array_attribute!(self, Attribute::Time, "time", Attribute::TimeArray)
+                parse_array_attribute!(self, AttributeValue::Time, "time", AttributeValue::TimeArray)
             }
             "color_array" => {
-                parse_array_attribute!(self, Attribute::Color, "color", Attribute::ColorArray)
+                parse_array_attribute!(self, AttributeValue::Color, "color", AttributeValue::ColorArray)
             }
             "vector2_array" => {
-                parse_array_attribute!(self, Attribute::Vector2, "vector2", Attribute::Vector2Array)
+                parse_array_attribute!(self, AttributeValue::Vector2, "vector2", AttributeValue::Vector2Array)
             }
             "vector3_array" => {
-                parse_array_attribute!(self, Attribute::Vector3, "vector3", Attribute::Vector3Array)
+                parse_array_attribute!(self, AttributeValue::Vector3, "vector3", AttributeValue::Vector3Array)
             }
             "vector4_array" => {
-                parse_array_attribute!(self, Attribute::Vector4, "vector4", Attribute::Vector4Array)
+                parse_array_attribute!(self, AttributeValue::Vector4, "vector4", AttributeValue::Vector4Array)
             }
             "qangle_array" => {
-                parse_array_attribute!(self, Attribute::Angle, "qangle", Attribute::AngleArray)
+                parse_array_attribute!(self, AttributeValue::Angle, "qangle", AttributeValue::AngleArray)
             }
             "quaternion_array" => {
-                parse_array_attribute!(self, Attribute::Quaternion, "quaternion", Attribute::QuaternionArray)
+                parse_array_attribute!(self, AttributeValue::Quaternion, "quaternion", AttributeValue::QuaternionArray)
             }
             "matrix_array" => {
-                parse_array_attribute!(self, Attribute::Matrix, "matrix", Attribute::MatrixArray)
+                parse_array_attribute!(self, AttributeValue::Matrix, "matrix", AttributeValue::MatrixArray)
             }
             _ => None,
         })
     }
 
-    fn read_attribute_value(&mut self, attribute_type: &str) -> Result<Option<Attribute>, KeyValues2SerializationError> {
+    fn read_attribute_value(&mut self, attribute_type: &str) -> Result<Option<AttributeValue>, KeyValues2SerializationError> {
         macro_rules! get_attribute_value {
             ($self:ident) => {
                 match self.next_token()?.ok_or(KeyValues2SerializationError::UnexpectedEndOfFile)? {
@@ -1056,7 +1122,7 @@ impl<T: BufRead> StringReader<T> {
             "int" => {
                 let attribute_value = get_attribute_value!(self);
 
-                Some(Attribute::Integer(parse_primitive!(
+                Some(AttributeValue::Integer(parse_primitive!(
                     self,
                     attribute_value,
                     KeyValues2SerializationError::ParseIntegerError
@@ -1064,7 +1130,7 @@ impl<T: BufRead> StringReader<T> {
             }
             "float" => {
                 let attribute_value = get_attribute_value!(self);
-                Some(Attribute::Float(parse_primitive!(
+                Some(AttributeValue::Float(parse_primitive!(
                     self,
                     attribute_value,
                     KeyValues2SerializationError::ParseFloatError
@@ -1072,7 +1138,7 @@ impl<T: BufRead> StringReader<T> {
             }
             "bool" => {
                 let attribute_value = get_attribute_value!(self);
-                Some(Attribute::Boolean(
+                Some(AttributeValue::Boolean(
                     attribute_value.parse::<u8>().map_err(|_| {
                         KeyValues2SerializationError::ParseBooleanError(self.line, self.column.saturating_sub(attribute_value.len().saturating_sub(1)))
                     })? != 0,
@@ -1080,7 +1146,7 @@ impl<T: BufRead> StringReader<T> {
             }
             "string" => {
                 let attribute_value = get_attribute_value!(self);
-                Some(Attribute::String(attribute_value))
+                Some(AttributeValue::String(attribute_value))
             }
             "binary" => {
                 let attribute_value = get_attribute_value!(self);
@@ -1093,7 +1159,7 @@ impl<T: BufRead> StringReader<T> {
                     })?);
                 }
 
-                Some(Attribute::Binary(block))
+                Some(AttributeValue::Binary(block))
             }
             "elementid" => {
                 let attribute_value = get_attribute_value!(self);
@@ -1101,19 +1167,23 @@ impl<T: BufRead> StringReader<T> {
                     KeyValues2SerializationError::ParseUUIDError(self.line, self.column.saturating_sub(attribute_value.len().saturating_sub(1)))
                 })?;
 
-                #[allow(deprecated)]
-                Some(Attribute::ObjectId(object_id))
+                Some(AttributeValue::ObjectId(object_id))
             }
             "time" => {
                 let attribute_value = get_attribute_value!(self);
-                let time: f64 = parse_primitive!(self, attribute_value, KeyValues2SerializationError::ParseFloatError);
-                let nanoseconds = time * 1_000_000_000.0;
-                Some(Attribute::Time(Duration::nanoseconds(nanoseconds as i64)))
+                let seconds: f32 = parse_primitive!(self, attribute_value, KeyValues2SerializationError::ParseFloatError);
+                let tenths_of_milliseconds = seconds * 10000.0;
+
+                if tenths_of_milliseconds > i32::MAX as f32 || tenths_of_milliseconds < i32::MIN as f32 {
+                    return Err(KeyValues2SerializationError::TimeAttributeOutOFRange(self.line, self.column));
+                }
+
+                Some(AttributeValue::Time(Time((seconds + 0.5).floor() as i32)))
             }
             "color" => {
                 let attribute_value = get_attribute_value!(self);
                 let mut tokens = attribute_value.split_whitespace();
-                Some(Attribute::Color(Color {
+                Some(AttributeValue::Color(Color {
                     red: parse_primitive!(self, tokens, attribute_value, KeyValues2SerializationError::ParseIntegerError),
                     green: parse_primitive!(self, tokens, attribute_value, KeyValues2SerializationError::ParseIntegerError),
                     blue: parse_primitive!(self, tokens, attribute_value, KeyValues2SerializationError::ParseIntegerError),
@@ -1123,7 +1193,7 @@ impl<T: BufRead> StringReader<T> {
             "vector2" => {
                 let attribute_value = get_attribute_value!(self);
                 let mut tokens = attribute_value.split_whitespace();
-                Some(Attribute::Vector2(Vector2 {
+                Some(AttributeValue::Vector2(Vector2 {
                     x: parse_primitive!(self, tokens, attribute_value, KeyValues2SerializationError::ParseFloatError),
                     y: parse_primitive!(self, tokens, attribute_value, KeyValues2SerializationError::ParseFloatError),
                 }))
@@ -1131,7 +1201,7 @@ impl<T: BufRead> StringReader<T> {
             "vector3" => {
                 let attribute_value = get_attribute_value!(self);
                 let mut tokens = attribute_value.split_whitespace();
-                Some(Attribute::Vector3(Vector3 {
+                Some(AttributeValue::Vector3(Vector3 {
                     x: parse_primitive!(self, tokens, attribute_value, KeyValues2SerializationError::ParseFloatError),
                     y: parse_primitive!(self, tokens, attribute_value, KeyValues2SerializationError::ParseFloatError),
                     z: parse_primitive!(self, tokens, attribute_value, KeyValues2SerializationError::ParseFloatError),
@@ -1140,7 +1210,7 @@ impl<T: BufRead> StringReader<T> {
             "vector4" => {
                 let attribute_value = get_attribute_value!(self);
                 let mut tokens = attribute_value.split_whitespace();
-                Some(Attribute::Vector4(Vector4 {
+                Some(AttributeValue::Vector4(Vector4 {
                     x: parse_primitive!(self, tokens, attribute_value, KeyValues2SerializationError::ParseFloatError),
                     y: parse_primitive!(self, tokens, attribute_value, KeyValues2SerializationError::ParseFloatError),
                     z: parse_primitive!(self, tokens, attribute_value, KeyValues2SerializationError::ParseFloatError),
@@ -1151,54 +1221,51 @@ impl<T: BufRead> StringReader<T> {
                 let attribute_value = get_attribute_value!(self);
                 let mut tokens = attribute_value.split_whitespace();
 
-                Some(Attribute::Angle(Angle {
-                    a: parse_primitive!(self, tokens, attribute_value, KeyValues2SerializationError::ParseFloatError),
-                    b: parse_primitive!(self, tokens, attribute_value, KeyValues2SerializationError::ParseFloatError),
-                    c: parse_primitive!(self, tokens, attribute_value, KeyValues2SerializationError::ParseFloatError),
-                    marker: std::marker::PhantomData,
+                Some(AttributeValue::Angle(Angle {
+                    pitch: parse_primitive!(self, tokens, attribute_value, KeyValues2SerializationError::ParseFloatError),
+                    yaw: parse_primitive!(self, tokens, attribute_value, KeyValues2SerializationError::ParseFloatError),
+                    roll: parse_primitive!(self, tokens, attribute_value, KeyValues2SerializationError::ParseFloatError),
                 }))
             }
             "quaternion" => {
                 let attribute_value = get_attribute_value!(self);
                 let mut tokens = attribute_value.split_whitespace();
-                Some(Attribute::Quaternion(Quaternion {
-                    v: Vector3 {
-                        x: parse_primitive!(self, tokens, attribute_value, KeyValues2SerializationError::ParseFloatError),
-                        y: parse_primitive!(self, tokens, attribute_value, KeyValues2SerializationError::ParseFloatError),
-                        z: parse_primitive!(self, tokens, attribute_value, KeyValues2SerializationError::ParseFloatError),
-                    },
-                    s: parse_primitive!(self, tokens, attribute_value, KeyValues2SerializationError::ParseFloatError),
+                Some(AttributeValue::Quaternion(Quaternion {
+                    x: parse_primitive!(self, tokens, attribute_value, KeyValues2SerializationError::ParseFloatError),
+                    y: parse_primitive!(self, tokens, attribute_value, KeyValues2SerializationError::ParseFloatError),
+                    z: parse_primitive!(self, tokens, attribute_value, KeyValues2SerializationError::ParseFloatError),
+                    w: parse_primitive!(self, tokens, attribute_value, KeyValues2SerializationError::ParseFloatError),
                 }))
             }
             "matrix" => {
                 let attribute_value = get_attribute_value!(self);
                 let mut tokens = attribute_value.split_whitespace();
-                Some(Attribute::Matrix(Matrix {
-                    x: Vector4 {
-                        x: parse_primitive!(self, tokens, attribute_value, KeyValues2SerializationError::ParseFloatError),
-                        y: parse_primitive!(self, tokens, attribute_value, KeyValues2SerializationError::ParseFloatError),
-                        z: parse_primitive!(self, tokens, attribute_value, KeyValues2SerializationError::ParseFloatError),
-                        w: parse_primitive!(self, tokens, attribute_value, KeyValues2SerializationError::ParseFloatError),
-                    },
-                    y: Vector4 {
-                        x: parse_primitive!(self, tokens, attribute_value, KeyValues2SerializationError::ParseFloatError),
-                        y: parse_primitive!(self, tokens, attribute_value, KeyValues2SerializationError::ParseFloatError),
-                        z: parse_primitive!(self, tokens, attribute_value, KeyValues2SerializationError::ParseFloatError),
-                        w: parse_primitive!(self, tokens, attribute_value, KeyValues2SerializationError::ParseFloatError),
-                    },
-                    z: Vector4 {
-                        x: parse_primitive!(self, tokens, attribute_value, KeyValues2SerializationError::ParseFloatError),
-                        y: parse_primitive!(self, tokens, attribute_value, KeyValues2SerializationError::ParseFloatError),
-                        z: parse_primitive!(self, tokens, attribute_value, KeyValues2SerializationError::ParseFloatError),
-                        w: parse_primitive!(self, tokens, attribute_value, KeyValues2SerializationError::ParseFloatError),
-                    },
-                    w: Vector4 {
-                        x: parse_primitive!(self, tokens, attribute_value, KeyValues2SerializationError::ParseFloatError),
-                        y: parse_primitive!(self, tokens, attribute_value, KeyValues2SerializationError::ParseFloatError),
-                        z: parse_primitive!(self, tokens, attribute_value, KeyValues2SerializationError::ParseFloatError),
-                        w: parse_primitive!(self, tokens, attribute_value, KeyValues2SerializationError::ParseFloatError),
-                    },
-                }))
+                Some(AttributeValue::Matrix(Matrix([
+                    [
+                        parse_primitive!(self, tokens, attribute_value, KeyValues2SerializationError::ParseFloatError),
+                        parse_primitive!(self, tokens, attribute_value, KeyValues2SerializationError::ParseFloatError),
+                        parse_primitive!(self, tokens, attribute_value, KeyValues2SerializationError::ParseFloatError),
+                        parse_primitive!(self, tokens, attribute_value, KeyValues2SerializationError::ParseFloatError),
+                    ],
+                    [
+                        parse_primitive!(self, tokens, attribute_value, KeyValues2SerializationError::ParseFloatError),
+                        parse_primitive!(self, tokens, attribute_value, KeyValues2SerializationError::ParseFloatError),
+                        parse_primitive!(self, tokens, attribute_value, KeyValues2SerializationError::ParseFloatError),
+                        parse_primitive!(self, tokens, attribute_value, KeyValues2SerializationError::ParseFloatError),
+                    ],
+                    [
+                        parse_primitive!(self, tokens, attribute_value, KeyValues2SerializationError::ParseFloatError),
+                        parse_primitive!(self, tokens, attribute_value, KeyValues2SerializationError::ParseFloatError),
+                        parse_primitive!(self, tokens, attribute_value, KeyValues2SerializationError::ParseFloatError),
+                        parse_primitive!(self, tokens, attribute_value, KeyValues2SerializationError::ParseFloatError),
+                    ],
+                    [
+                        parse_primitive!(self, tokens, attribute_value, KeyValues2SerializationError::ParseFloatError),
+                        parse_primitive!(self, tokens, attribute_value, KeyValues2SerializationError::ParseFloatError),
+                        parse_primitive!(self, tokens, attribute_value, KeyValues2SerializationError::ParseFloatError),
+                        parse_primitive!(self, tokens, attribute_value, KeyValues2SerializationError::ParseFloatError),
+                    ],
+                ])))
             }
             _ => None,
         })
@@ -1210,7 +1277,7 @@ impl<T: BufRead> StringReader<T> {
         collected_elements: &mut IndexMap<UUID, Element>,
         element_remap: &mut IndexMap<Element, Vec<(String, ElementAttributeRemap)>>,
     ) -> Result<Element, KeyValues2SerializationError> {
-        let mut element = Element::create(String::new(), element_class);
+        let mut element = Element::new(element_class);
         if collected_elements.insert(*element.get_id(), Element::clone(&element)).is_some() {
             return Err(KeyValues2SerializationError::DuplicateGeneratedElementId);
         }
@@ -1234,9 +1301,6 @@ enum ReadToken {
     CloseBracket,
 }
 
-/// Serialize elements to a text format.
-///
-/// KeyValues2 is a extension of KeyValues where its "Key" "Type" "Value".
 pub struct KeyValues2Serializer;
 
 impl Serializer for KeyValues2Serializer {
@@ -1262,8 +1326,8 @@ impl Serializer for KeyValues2Serializer {
             elements.insert(root.clone(), if elements.is_empty() { 1 } else { 0 });
 
             for attribute in root.get_attributes().values() {
-                match attribute {
-                    Attribute::Element(value) => match value {
+                match &*attribute.get_inner() {
+                    AttributeValue::Element(value) => match value {
                         Some(element) => {
                             if let Some(count) = elements.get_mut(element) {
                                 *count += 1;
@@ -1273,7 +1337,7 @@ impl Serializer for KeyValues2Serializer {
                         }
                         None => continue,
                     },
-                    Attribute::ElementArray(values) => {
+                    AttributeValue::ElementArray(values) => {
                         for value in values {
                             match value {
                                 Some(element) => {
@@ -1303,7 +1367,6 @@ impl Serializer for KeyValues2Serializer {
             writer.write_line(&format!("\"{}\"", writer.format_escape_characters(&element.get_class())))?;
             writer.write_open_brace()?;
             writer.write_line(&format!("\"id\" \"elementid\" \"{}\"", element.get_id()))?;
-            writer.write_line(&format!("\"name\" \"string\" \"{}\"", writer.format_escape_characters(&element.get_name())))?;
             writer.write_attributes(element, &collected_elements)?;
             writer.write_close_brace()?;
             writer.write_line("")?;
@@ -1337,12 +1400,12 @@ impl Serializer for KeyValues2Serializer {
                 match attribute_remap {
                     ElementAttributeRemap::Single(uuid) => {
                         if let Some(reference_element) = collected_elements.get(&uuid) {
-                            element.set_attribute(attribute_name, Attribute::Element(Some(Element::clone(reference_element))));
+                            element.set_attribute(attribute_name, Attribute::new(AttributeValue::Element(Some(Element::clone(reference_element)))));
                         }
                     }
                     ElementAttributeRemap::Array(remaps) => {
-                        if let Some(mut remapped_array) = element.get_attribute(&attribute_name).and_then(|attr| match attr.clone() {
-                            Attribute::ElementArray(arr) => Some(arr),
+                        if let Some(mut remapped_array) = element.get_attribute(&attribute_name).and_then(|attr| match &*attr.get_inner() {
+                            AttributeValue::ElementArray(arr) => Some(arr.clone()),
                             _ => None,
                         }) {
                             for (index, uuid) in remaps {
@@ -1351,7 +1414,7 @@ impl Serializer for KeyValues2Serializer {
                                 }
                             }
 
-                            element.set_attribute(attribute_name, Attribute::ElementArray(remapped_array));
+                            element.set_attribute(attribute_name, Attribute::new(AttributeValue::ElementArray(remapped_array)));
                         }
                     }
                 }
@@ -1366,9 +1429,6 @@ impl Serializer for KeyValues2Serializer {
     }
 }
 
-/// Serialize elements to a text format.
-///
-/// Like KeyValues2 but elements are not inlined.
 pub struct KeyValues2FlatSerializer;
 
 impl Serializer for KeyValues2FlatSerializer {
@@ -1394,8 +1454,8 @@ impl Serializer for KeyValues2FlatSerializer {
             elements.insert(root.clone(), 1);
 
             for attribute in root.get_attributes().values() {
-                match attribute {
-                    Attribute::Element(value) => match value {
+                match &*attribute.get_inner() {
+                    AttributeValue::Element(value) => match value {
                         Some(element) => {
                             if let Some(count) = elements.get_mut(element) {
                                 *count += 1;
@@ -1405,7 +1465,7 @@ impl Serializer for KeyValues2FlatSerializer {
                         }
                         None => continue,
                     },
-                    Attribute::ElementArray(values) => {
+                    AttributeValue::ElementArray(values) => {
                         for value in values {
                             match value {
                                 Some(element) => {
@@ -1435,7 +1495,6 @@ impl Serializer for KeyValues2FlatSerializer {
             writer.write_line(&format!("\"{}\"", writer.format_escape_characters(&element.get_class())))?;
             writer.write_open_brace()?;
             writer.write_line(&format!("\"id\" \"elementid\" \"{}\"", element.get_id()))?;
-            writer.write_line(&format!("\"name\" \"string\" \"{}\"", writer.format_escape_characters(&element.get_name())))?;
             writer.write_attributes(element, &collected_elements)?;
             writer.write_close_brace()?;
             writer.write_line("")?;
