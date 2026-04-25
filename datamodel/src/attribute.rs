@@ -303,6 +303,99 @@ impl mint::IntoMint for Quaternion {
 #[derive(Debug, Clone, Copy, Default)]
 pub struct Matrix(pub [[f32; 4]; 4]);
 
+#[cfg(feature = "mint")]
+impl From<mint::RowMatrix4<f32>> for Matrix {
+    fn from(value: mint::RowMatrix4<f32>) -> Self {
+        Self([
+            [value.x.x, value.x.y, value.x.z, value.x.w],
+            [value.y.x, value.y.y, value.y.z, value.y.w],
+            [value.z.x, value.z.y, value.z.z, value.z.w],
+            [value.w.x, value.w.y, value.w.z, value.w.w],
+        ])
+    }
+}
+
+#[cfg(feature = "mint")]
+impl From<Matrix> for mint::RowMatrix4<f32> {
+    fn from(value: Matrix) -> Self {
+        Self {
+            x: mint::Vector4 {
+                x: value.0[0][0],
+                y: value.0[0][1],
+                z: value.0[0][2],
+                w: value.0[0][3],
+            },
+            y: mint::Vector4 {
+                x: value.0[1][0],
+                y: value.0[1][1],
+                z: value.0[1][2],
+                w: value.0[1][3],
+            },
+            z: mint::Vector4 {
+                x: value.0[2][0],
+                y: value.0[2][1],
+                z: value.0[2][2],
+                w: value.0[2][3],
+            },
+            w: mint::Vector4 {
+                x: value.0[3][0],
+                y: value.0[3][1],
+                z: value.0[3][2],
+                w: value.0[3][3],
+            },
+        }
+    }
+}
+
+#[cfg(feature = "mint")]
+impl From<mint::ColumnMatrix4<f32>> for Matrix {
+    fn from(value: mint::ColumnMatrix4<f32>) -> Self {
+        Self([
+            [value.x.x, value.y.x, value.z.x, value.w.x],
+            [value.x.y, value.y.y, value.z.y, value.w.y],
+            [value.x.z, value.y.z, value.z.z, value.w.z],
+            [value.x.w, value.y.w, value.z.w, value.w.w],
+        ])
+    }
+}
+
+#[cfg(feature = "mint")]
+impl From<Matrix> for mint::ColumnMatrix4<f32> {
+    fn from(value: Matrix) -> Self {
+        Self {
+            x: mint::Vector4 {
+                x: value.0[0][0],
+                y: value.0[1][0],
+                z: value.0[2][0],
+                w: value.0[3][0],
+            },
+            y: mint::Vector4 {
+                x: value.0[0][1],
+                y: value.0[1][1],
+                z: value.0[2][1],
+                w: value.0[3][1],
+            },
+            z: mint::Vector4 {
+                x: value.0[0][2],
+                y: value.0[1][2],
+                z: value.0[2][2],
+                w: value.0[3][2],
+            },
+            w: mint::Vector4 {
+                x: value.0[0][3],
+                y: value.0[1][3],
+                z: value.0[2][3],
+                w: value.0[3][3],
+            },
+        }
+    }
+}
+
+#[cfg(feature = "mint")]
+impl mint::IntoMint for Matrix {
+    type MintType = mint::RowMatrix4<f32>;
+}
+
 attribute_list! {
     Element: Option<Element>,
     Integer: i32,
