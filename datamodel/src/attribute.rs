@@ -230,9 +230,9 @@ pub struct Angle {
 impl From<mint::EulerAngles<f32, mint::IntraXYZ>> for Angle {
     fn from(value: mint::EulerAngles<f32, mint::IntraXYZ>) -> Self {
         Self {
-            pitch: value.b,
-            yaw: value.c,
-            roll: value.a,
+            pitch: value.b.to_degrees(),
+            yaw: value.c.to_degrees(),
+            roll: value.a.to_degrees(),
         }
     }
 }
@@ -241,9 +241,9 @@ impl From<mint::EulerAngles<f32, mint::IntraXYZ>> for Angle {
 impl From<Angle> for mint::EulerAngles<f32, mint::IntraXYZ> {
     fn from(value: Angle) -> Self {
         Self {
-            a: value.roll,
-            b: value.pitch,
-            c: value.yaw,
+            a: value.roll.to_radians(),
+            b: value.pitch.to_radians(),
+            c: value.yaw.to_radians(),
             marker: std::marker::PhantomData,
         }
     }
