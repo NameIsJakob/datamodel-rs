@@ -48,7 +48,7 @@ impl Header {
 
     pub fn from_string(value: String) -> Result<(Self, String, i32), FileHeaderError> {
         const HEADER_START: &str = "<!-- dmx encoding ";
-        const HEADER_END: &str = " -->";
+        const HEADER_END: &str = " -->\n";
         if !value.starts_with(HEADER_START) {
             return Self::read_legacy(value);
         }
