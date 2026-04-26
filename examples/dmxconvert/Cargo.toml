@@ -1,0 +1,11 @@
+[package]
+name = "dmxconvert"
+version = "1.0.0"
+edition = "2024"
+authors = ["NameIsJakob"]
+publish = false
+
+[dependencies]
+clap = { version = "4.6.1", features = ["derive"] }
+datamodel = { path = "../../datamodel" }
+thiserror = "2.0.18"
