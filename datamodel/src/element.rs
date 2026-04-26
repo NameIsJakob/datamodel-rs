@@ -128,8 +128,9 @@ impl Element {
         element_data.id = id;
     }
 
-    pub fn get_attribute(&self, name: &str) -> Option<Attribute> {
-        self.0.borrow().attributes.get(name).cloned()
+    pub fn get_attribute(&self, name: impl AsRef<str>) -> Option<Attribute> {
+        let attribute_name = name.as_ref();
+        self.0.borrow().attributes.get(attribute_name).cloned()
     }
 
     pub fn remove_attribute(&mut self, name: impl AsRef<str>) -> Option<Attribute> {
@@ -138,9 +139,9 @@ impl Element {
         element_data.attributes.shift_remove(attribute_name)
     }
 
-    pub fn set_attribute(&mut self, name: impl Into<String>, attribute: Attribute) {
+    pub fn set_attribute(&mut self, name: impl Into<String>, attribute: Attribute) -> Option<Attribute> {
         let attribute_name = name.into();
-        self.0.borrow_mut().attributes.insert(attribute_name, attribute);
+        self.0.borrow_mut().attributes.insert(attribute_name, attribute)
     }
 
     pub fn get_attributes(&self) -> Ref<'_, IndexMap<String, Attribute>> {
