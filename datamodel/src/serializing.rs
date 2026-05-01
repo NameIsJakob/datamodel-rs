@@ -47,16 +47,17 @@ impl Header {
     }
 
     pub fn from_string(value: String) -> Result<(Self, String, i32), FileHeaderError> {
+        let trimmed_header = value.trim();
         const HEADER_START: &str = "<!-- dmx encoding ";
-        const HEADER_END: &str = " -->\n";
-        if !value.starts_with(HEADER_START) {
+        const HEADER_END: &str = " -->";
+        if !trimmed_header.starts_with(HEADER_START) {
             return Self::read_legacy(value);
         }
-        if !value.ends_with(HEADER_END) {
+        if !trimmed_header.ends_with(HEADER_END) {
             return Err(FileHeaderError::InvalidFileHeader);
         }
 
-        let inner_tokens = &value[HEADER_START.len()..value.len() - HEADER_END.len()];
+        let inner_tokens = &trimmed_header[HEADER_START.len()..trimmed_header.len() - HEADER_END.len()];
         let tokens = inner_tokens.split_whitespace().collect::<Vec<_>>();
         if tokens.len() != 5 || tokens[2] != "format" {
             return Err(FileHeaderError::InvalidFileHeader);
@@ -71,13 +72,14 @@ impl Header {
     }
 
     fn read_legacy(value: String) -> Result<(Self, String, i32), FileHeaderError> {
+        let trimmed_header = value.trim();
         const HEADER_START: &str = "<!-- DMXVersion ";
         const HEADER_END: &str = " -->";
-        if !value.starts_with(HEADER_START) || !value.ends_with(HEADER_END) {
+        if !trimmed_header.starts_with(HEADER_START) || !trimmed_header.ends_with(HEADER_END) {
             return Err(FileHeaderError::InvalidFileHeader);
         }
 
-        let inner_tokens = &value[HEADER_START.len()..value.len() - HEADER_END.len()];
+        let inner_tokens = &trimmed_header[HEADER_START.len()..trimmed_header.len() - HEADER_END.len()];
         let tokens = inner_tokens.split_whitespace().collect::<Vec<_>>();
         if tokens.len() != 1 {
             return Err(FileHeaderError::InvalidFileHeader);
@@ -128,7 +130,7 @@ impl Header {
             ));
         }
 
-        Err(FileHeaderError::InvalidFileHeader)
+        Err(FileHeaderError::UnknownLegacyEncoding(legacy_encoding.to_string()))
     }
 
     pub fn from_buffer(buffer: &mut impl BufRead) -> Result<(Self, String, i32), FileHeaderError> {
