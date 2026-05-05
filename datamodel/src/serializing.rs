@@ -23,7 +23,7 @@ pub enum FileHeaderError {
 }
 
 const CURRENT_ENCODING: &str = "dmx";
-const CURRENT_FORMAT_VERSION: i32 = 18;
+const CURRENT_FORMAT_VERSION: i32 = 22;
 
 #[derive(Debug, Clone)]
 pub struct Header {

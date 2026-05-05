@@ -412,6 +412,8 @@ attribute_list! {
     Angle: Angle,
     Quaternion: Quaternion,
     Matrix: Matrix,
+    ULong: u64,
+    UByte: u8,
 }
 
 #[derive(Clone, Debug)]

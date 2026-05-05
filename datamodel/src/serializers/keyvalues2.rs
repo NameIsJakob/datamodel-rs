@@ -233,6 +233,8 @@ impl<T: Write> StringWriter<T> {
                     self.tab_index -= 1;
                     self.write_line("\"")?;
                 }
+                AttributeValue::ULong(unsigned_long) => write_attribute_string!(self, name, attribute_type_name, format!("0x{unsigned_long:01X}"))?,
+                AttributeValue::UByte(unsigned_byte) => write_attribute_string!(self, name, attribute_type_name, unsigned_byte)?,
                 AttributeValue::ElementArray(elements) => {
                     write_attribute_string!(self, name, attribute_type_name)?;
                     self.write_open_bracket()?;
@@ -488,6 +490,28 @@ impl<T: Write> StringWriter<T> {
                     }
                     self.write_close_bracket()?;
                 }
+                AttributeValue::ULongArray(unsigned_longs) => {
+                    write_attribute_string!(self, name, attribute_type_name)?;
+                    self.write_open_bracket()?;
+                    if let Some((last_unsigned_long, unsigned_longs)) = unsigned_longs.split_last() {
+                        for unsigned_long in unsigned_longs {
+                            self.write_line(&format!("\"0x{unsigned_long:01X}\","))?;
+                        }
+                        self.write_line(&format!("\"0x{last_unsigned_long:01X}\""))?;
+                    }
+                    self.write_close_bracket()?;
+                }
+                AttributeValue::UByteArray(unsigned_bytes) => {
+                    write_attribute_string!(self, name, attribute_type_name)?;
+                    self.write_open_bracket()?;
+                    if let Some((last_unsigned_byte, unsigned_bytes)) = unsigned_bytes.split_last() {
+                        for unsigned_byte in unsigned_bytes {
+                            self.write_line(&format!("\"{unsigned_byte}\","))?;
+                        }
+                        self.write_line(&format!("\"{last_unsigned_byte}\""))?;
+                    }
+                    self.write_close_bracket()?;
+                }
             }
         }
         Ok(())
@@ -510,6 +534,8 @@ impl<T: Write> StringWriter<T> {
             AttributeType::Angle => "qangle",
             AttributeType::Quaternion => "quaternion",
             AttributeType::Matrix => "matrix",
+            AttributeType::ULong => "uint64",
+            AttributeType::UByte => "uint8",
             AttributeType::ElementArray => "element_array",
             AttributeType::IntegerArray => "int_array",
             AttributeType::FloatArray => "float_array",
@@ -525,6 +551,8 @@ impl<T: Write> StringWriter<T> {
             AttributeType::AngleArray => "qangle_array",
             AttributeType::QuaternionArray => "quaternion_array",
             AttributeType::MatrixArray => "matrix_array",
+            AttributeType::ULongArray => "uint64_array",
+            AttributeType::UByteArray => "uint8_array",
         }
     }
 
@@ -1083,6 +1111,12 @@ impl<T: BufRead> StringReader<T> {
             "matrix_array" => {
                 parse_array_attribute!(self, AttributeValue::Matrix, "matrix", AttributeValue::MatrixArray)
             }
+            "uint64_array" => {
+                parse_array_attribute!(self, AttributeValue::ULong, "uint64", AttributeValue::ULongArray)
+            }
+            "uint8_array" => {
+                parse_array_attribute!(self, AttributeValue::UByte, "uint8", AttributeValue::UByteArray)
+            }
             _ => None,
         })
     }
@@ -1267,6 +1301,28 @@ impl<T: BufRead> StringReader<T> {
                     ],
                 ])))
             }
+            "uint64" => {
+                let attribute_value = get_attribute_value!(self);
+
+                if let Some(stripped) = attribute_value.strip_prefix("0x") {
+                    Some(AttributeValue::ULong(u64::from_str_radix(stripped, 16).map_err(|_| {
+                        KeyValues2SerializationError::ParseIntegerError(self.line, self.column.saturating_sub(attribute_value.len().saturating_sub(1)))
+                    })?))
+                } else {
+                    Some(AttributeValue::ULong(u64::from_str_radix(&attribute_value, 16).map_err(|_| {
+                        KeyValues2SerializationError::ParseIntegerError(self.line, self.column.saturating_sub(attribute_value.len().saturating_sub(1)))
+                    })?))
+                }
+            }
+            "uint8" => {
+                let attribute_value = get_attribute_value!(self);
+
+                Some(AttributeValue::UByte(parse_primitive!(
+                    self,
+                    attribute_value,
+                    KeyValues2SerializationError::ParseIntegerError
+                )))
+            }
             _ => None,
         })
     }
@@ -1311,7 +1367,7 @@ impl Serializer for KeyValues2Serializer {
     }
 
     fn version() -> i32 {
-        1
+        4
     }
 
     fn serialize_version(buffer: &mut impl Write, header: &Header, root: &Element, version: i32) -> Result<(), Self::Error> {
@@ -1390,7 +1446,7 @@ impl Serializer for KeyValues2Serializer {
         let mut root = None;
 
         while let Some(root_element) = reader.read_element(&mut collected_elements, &mut element_remap)? {
-            if root.is_none() {
+            if root.is_none() && !root_element.get_class().eq("$prefix_element$") {
                 root = Some(root_element);
             }
         }
@@ -1439,7 +1495,7 @@ impl Serializer for KeyValues2FlatSerializer {
     }
 
     fn version() -> i32 {
-        1
+        4
     }
 
     fn serialize_version(buffer: &mut impl Write, header: &Header, root: &Element, version: i32) -> Result<(), Self::Error> {
