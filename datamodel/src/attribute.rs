@@ -300,8 +300,14 @@ impl mint::IntoMint for Quaternion {
     type MintType = mint::Quaternion<f32>;
 }
 
-#[derive(Debug, Clone, Copy, Default)]
+#[derive(Debug, Clone, Copy)]
 pub struct Matrix(pub [[f32; 4]; 4]);
+
+impl Default for Matrix {
+    fn default() -> Self {
+        Self([[1.0, 0.0, 0.0, 0.0], [0.0, 1.0, 0.0, 0.0], [0.0, 0.0, 1.0, 0.0], [0.0, 0.0, 0.0, 1.0]])
+    }
+}
 
 #[cfg(feature = "mint")]
 impl From<mint::RowMatrix4<f32>> for Matrix {
