@@ -2,10 +2,20 @@
 name = "datamodel-derive"
 version = "0.1.0"
 edition = "2024"
+authors = ["NameIsJakob"]
+description = "Derive Macro to implement ElementClass for datamodel-rs"
+repository = "https://github.com/NameIsJakob/datamodel-rs/"
+license = "MIT"
+keywords = ["derive"]
+readme = "README.md"
 
 [lib]
 proc-macro = true
 
 [dependencies]
 quote = { version = "1.0.45", default-features = false }
-syn = { version = "2.0.117", default-features = false, features = ["derive", "parsing", "proc-macro"] }
+syn = { version = "2.0.117", default-features = false, features = [
+    "derive",
+    "parsing",
+    "proc-macro",
+] }
