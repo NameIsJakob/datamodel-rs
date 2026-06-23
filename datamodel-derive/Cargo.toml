@@ -7,7 +7,7 @@ description = "Derive Macro to implement ElementClass for datamodel-rs"
 repository = "https://github.com/NameIsJakob/datamodel-rs/"
 license = "MIT"
 keywords = ["derive"]
-readme = "README.md"
+readme = "../README.md"
 
 [lib]
 proc-macro = true

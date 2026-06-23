@@ -8,10 +8,10 @@ repository = "https://github.com/NameIsJakob/datamodel-rs/"
 license = "MIT"
 keywords = ["valve", "source-engine", "datamodel"]
 categories = ["parser-implementations"]
-readme = "README.md"
+readme = "../README.md"
 
 [dependencies]
-datamodel-derive = { path = "../datamodel-derive", optional = true }
+datamodel-derive = { version = "0.1.0", path = "../datamodel-derive", optional = true }
 indexmap = { version = "2.13.0", default-features = false, features = ["std"] }
 mint = { version = "0.5.9", default-features = false, optional = true }
 paste = { version = "1.0.15", default-features = false }
