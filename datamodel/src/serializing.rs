@@ -10,6 +10,7 @@ use crate::{
     serializers::{BinarySerializationError, BinarySerializer, KeyValues2FlatSerializer, KeyValues2SerializationError, KeyValues2Serializer},
 };
 
+/// An error returned by [Header] when parsing a header.
 #[derive(Debug, ThisError)]
 pub enum FileHeaderError {
     #[error("IO error: {0}")]
@@ -25,9 +26,16 @@ pub enum FileHeaderError {
 const CURRENT_ENCODING: &str = "dmx";
 const CURRENT_FORMAT_VERSION: i32 = 22;
 
+/// The data stored in the header data of the DMX file.
+///
+/// The header stores what the data represents in the file.
+///
+/// The header must be at the beginning of the file.
 #[derive(Debug, Clone)]
 pub struct Header {
+    /// The identifier of what the file data represents for example "model" or "sfm".
     pub format: String,
+    /// The numerical valve of the version that the file is representing.
     pub format_version: i32,
 }
 
@@ -41,11 +49,16 @@ impl Default for Header {
 }
 
 impl Header {
+    /// A way to create a new [Header] with specified format identifier and version.
     pub fn new(format: impl Into<String>, format_version: i32) -> Self {
         let format = format.into();
         Self { format, format_version }
     }
 
+    /// Parses a [Header] from a string.
+    ///
+    /// # Returns
+    /// The [Header], encoding string, and encoding version that was parsed.
     pub fn from_string(value: String) -> Result<(Self, String, i32), FileHeaderError> {
         let trimmed_header = value.trim();
         const HEADER_START: &str = "<!-- dmx encoding ";
@@ -133,12 +146,22 @@ impl Header {
         Err(FileHeaderError::UnknownLegacyEncoding(legacy_encoding.to_string()))
     }
 
+    /// Parses a [Header] from a buffer.
+    ///
+    /// # Returns
+    /// The [Header], encoding string, and encoding version that was parsed.
     pub fn from_buffer(buffer: &mut impl BufRead) -> Result<(Self, String, i32), FileHeaderError> {
         let mut string_buffer = Vec::new();
         buffer.read_until(b'\n', &mut string_buffer)?;
         Self::from_string(String::from_utf8_lossy(&string_buffer).into_owned())
     }
 
+    /// Creates a proper DMX file header.
+    ///
+    /// # Example
+    /// ```text
+    /// <!-- dmx encoding {encoding} {encoding_version} format {format} {format_version} -->
+    /// ```
     pub fn create_header(&self, encoding: &str, encoding_version: i32) -> String {
         format!(
             "<!-- dmx encoding {} {} format {} {} -->\n",
@@ -147,6 +170,7 @@ impl Header {
     }
 }
 
+/// An error returned by [deserialize].
 #[derive(Debug, ThisError)]
 pub enum SerializationError {
     #[error("Unknown Encoding")]
@@ -159,6 +183,19 @@ pub enum SerializationError {
     KeyValues2(#[from] KeyValues2SerializationError),
 }
 
+/// Deserialize a buffer with Valve Serializers.
+///
+/// The serializer and version is selected from the file header at the start of the buffer.
+///
+/// Supports legacy headers.
+///
+/// # Returns
+/// The parsed [Header] and the root [Element] from the buffer.
+///
+/// # Supported Encodings
+/// - `binary` with [BinarySerializer]
+/// - `keyvalues2` with [KeyValues2Serializer]
+/// - `keyvalues2_flat` with [KeyValues2FlatSerializer]
 pub fn deserialize(buffer: &mut impl BufRead) -> Result<(Header, Element), SerializationError> {
     let (header, encoding, version) = Header::from_buffer(buffer)?;
 
@@ -170,14 +207,25 @@ pub fn deserialize(buffer: &mut impl BufRead) -> Result<(Header, Element), Seria
     }
 }
 
+/// The trait allows for serialize and deserialize of a buffer for a root element from an encoding.
 pub trait Serializer {
+    /// The error type that serialize_version and deserialize might return.
     type Error;
 
+    /// The name of the encoding that will be put in the header of the file.
     fn name() -> &'static str;
+    /// The current version of the encoding.
     fn version() -> i32;
+    /// Encodes a root element to a buffer with a selected version.
+    ///
+    /// The implementation must check the passed in version if its valid.
     fn serialize_version(buffer: &mut impl Write, header: &Header, root: &Element, version: i32) -> Result<(), Self::Error>;
+    /// Encodes a root element to a buffer with the current version of the encoding.
     fn serialize(buffer: &mut impl Write, header: &Header, root: &Element) -> Result<(), Self::Error> {
         Self::serialize_version(buffer, header, root, Self::version())
     }
+    /// Decodes the buffer for the root element.
+    ///
+    /// The implementation must check the passed in encoding and version are valid and must handle the file header that might exist.
     fn deserialize(buffer: &mut impl BufRead, encoding: String, version: i32) -> Result<Element, Self::Error>;
 }

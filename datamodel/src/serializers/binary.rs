@@ -14,6 +14,7 @@ use crate::{
     serializing::{Header, Serializer},
 };
 
+/// An error returned by [BinarySerializer] from serializing or deserializing.
 #[derive(Debug, ThisError)]
 pub enum BinarySerializationError {
     #[error("Read Buffer Error: \"{0}\"")]
@@ -54,6 +55,11 @@ pub enum BinarySerializationError {
     NoElements,
 }
 
+/// Valve's Binary encoding Serializer.
+///
+/// Encodes the data in a binary format for smaller file sizes.
+///
+/// Versions are between 1 and 9.
 pub struct BinarySerializer;
 
 impl Serializer for BinarySerializer {

@@ -10,6 +10,7 @@ use crate::{
     serializing::{Header, Serializer},
 };
 
+/// An error returned by [KeyValues2Serializer] and [KeyValues2FlatSerializer] from serializing or deserializing.
 #[derive(Debug, ThisError)]
 pub enum KeyValues2SerializationError {
     #[error("IO Error: {0}")]
@@ -1357,6 +1358,11 @@ enum ReadToken {
     CloseBracket,
 }
 
+/// Valve's KeyValues2 encoding Serializer.
+///
+/// Encodes the data in a ASCII text format.
+///
+/// Versions are between 1 and 4.
 pub struct KeyValues2Serializer;
 
 impl Serializer for KeyValues2Serializer {
@@ -1485,6 +1491,11 @@ impl Serializer for KeyValues2Serializer {
     }
 }
 
+/// Valve's KeyValues2 Flat encoding Serializer.
+///
+/// This is the same as [KeyValues2Serializer] but no elements are inlined.
+///
+/// Versions are between 1 and 4.
 pub struct KeyValues2FlatSerializer;
 
 impl Serializer for KeyValues2FlatSerializer {

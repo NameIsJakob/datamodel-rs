@@ -10,10 +10,12 @@ attributes to store data.
 
 # What is supported?
 
--   Binary encoding version 1 - 5 supported
+-   Binary encoding version 1 - 9 supported
 -   keyvalues2 encoding
 -   keyvalues2_flat encoding
 
 # Example
 
 An example is a dmx model format importer used in [Source Wrench](https://github.com/NameIsJakob/source-wrench/blob/main/src/import/dmx.rs)
+
+More examples can be seen in [Examples](./examples/)

@@ -9,12 +9,14 @@ pub use uuid::Uuid as UUID;
 macro_rules! attribute_list {
     ($($name:ident : $value:ty),* $(,)?) => {
         paste::paste! {
+            /// A value to specify what type the attribute is.
             #[derive(Clone, Copy, Debug, Eq, PartialEq)]
             pub enum AttributeType {
                 $($name,)*
                 $([<$name Array>],)*
             }
 
+            /// Possible values which the attribute will store.
             #[derive(Clone, Debug)]
             pub enum AttributeValue {
                 $($name($value),)*
@@ -83,9 +85,11 @@ macro_rules! attribute_list {
     };
 }
 
+/// A structure that holds raw binary data.
 #[derive(Debug, Clone, Default)]
 pub struct BinaryBlock(pub Vec<u8>);
 
+/// A representation of time in tenths of a millisecond.
 #[derive(Debug, Clone, Copy, Default)]
 pub struct Time(pub i32);
 
@@ -95,6 +99,7 @@ impl Time {
     }
 }
 
+/// A structure that 8 bit RGBA color.
 #[derive(Debug, Clone, Copy, Default)]
 pub struct Color {
     pub red: u8,
@@ -103,6 +108,7 @@ pub struct Color {
     pub alpha: u8,
 }
 
+/// A mathematical 2 dimensional vector.
 #[derive(Debug, Clone, Copy, Default)]
 pub struct Vector2 {
     pub x: f32,
@@ -142,6 +148,7 @@ impl mint::IntoMint for Vector2 {
     type MintType = mint::Vector2<f32>;
 }
 
+/// A mathematical 3 dimensional vector.
 #[derive(Debug, Clone, Copy, Default)]
 pub struct Vector3 {
     pub x: f32,
@@ -182,6 +189,7 @@ impl mint::IntoMint for Vector3 {
     type MintType = mint::Vector3<f32>;
 }
 
+/// A mathematical 4 dimensional vector.
 #[derive(Debug, Clone, Copy, Default)]
 pub struct Vector4 {
     pub x: f32,
@@ -219,6 +227,7 @@ impl mint::IntoMint for Vector4 {
     type MintType = mint::Vector4<f32>;
 }
 
+/// A Tait-Bryan 3 dimensional angle.
 #[derive(Debug, Clone, Copy, Default)]
 pub struct Angle {
     pub pitch: f32,
@@ -254,6 +263,7 @@ impl mint::IntoMint for Angle {
     type MintType = mint::EulerAngles<f32, mint::IntraXYZ>;
 }
 
+/// A mathematical Quaternion.
 #[derive(Debug, Clone, Copy)]
 pub struct Quaternion {
     pub x: f32,
@@ -300,6 +310,7 @@ impl mint::IntoMint for Quaternion {
     type MintType = mint::Quaternion<f32>;
 }
 
+/// A mathematical 4 by 4 matrix.
 #[derive(Debug, Clone, Copy)]
 pub struct Matrix(pub [[f32; 4]; 4]);
 
@@ -422,6 +433,11 @@ attribute_list! {
     UByte: u8,
 }
 
+/// A reference-counted, data that stores a attribute type.
+///
+/// # Panics
+/// Borrowing rules from [RefCell] apply:
+/// operations may panic if runtime borrow rules are violated
 #[derive(Clone, Debug)]
 pub struct Attribute(Rc<RefCell<AttributeValue>>);
 
@@ -439,13 +455,19 @@ impl Attribute {
     }
 }
 
+/// A trait to implement a type that stores as a attribute value.
 pub trait AttributeInfo: Default {
+    /// Returns the attribute type the value stores.
     fn attribute_type() -> AttributeType;
+    /// Converts the value into a attribute value.
     fn into_attribute_type(self) -> AttributeValue;
+    /// Converts the value into an attribute.
     fn into_attribute(self) -> Attribute {
         Attribute::new(self.into_attribute_type())
     }
+    /// Gets the inner values of a attribute if its the correct attribute type.
     fn get_inner(attribute: &AttributeValue) -> Option<&Self>;
+    /// Gets the inner values as mutably of a attribute if its the correct attribute type.
     fn get_inner_mut(attribute: &mut AttributeValue) -> Option<&mut Self>;
 }
 

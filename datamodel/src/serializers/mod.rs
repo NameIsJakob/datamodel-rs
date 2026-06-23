@@ -1,3 +1,5 @@
+//! Support for Valve made dmx encoding formats.
+
 mod binary;
 pub use binary::BinarySerializationError;
 pub use binary::BinarySerializer;
