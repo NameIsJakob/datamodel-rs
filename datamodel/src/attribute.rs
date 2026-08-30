@@ -42,14 +42,14 @@ macro_rules! attribute_list {
                         AttributeValue::$name(self)
                     }
 
-                    fn get_inner(attribute: &AttributeValue) -> Option<&Self> {
+                    fn get_attribute_value(attribute: &AttributeValue) -> Option<&Self> {
                         match attribute {
                             AttributeValue::$name(inner_value) => Some(inner_value),
                             _ => None
                         }
                     }
 
-                    fn get_inner_mut(attribute: &mut AttributeValue) -> Option<&mut Self> {
+                    fn get_attribute_value_mut(attribute: &mut AttributeValue) -> Option<&mut Self> {
                         match attribute {
                             AttributeValue::$name(inner_value) => Some(inner_value),
                             _ => None
@@ -66,14 +66,14 @@ macro_rules! attribute_list {
                         AttributeValue::[<$name Array>](self)
                     }
 
-                    fn get_inner(attribute: &AttributeValue) -> Option<&Self> {
+                    fn get_attribute_value(attribute: &AttributeValue) -> Option<&Self> {
                         match attribute {
                             AttributeValue::[<$name Array>](inner_value) => Some(inner_value),
                             _ => None
                         }
                     }
 
-                    fn get_inner_mut(attribute: &mut AttributeValue) -> Option<&mut Self> {
+                    fn get_attribute_value_mut(attribute: &mut AttributeValue) -> Option<&mut Self> {
                         match attribute {
                             AttributeValue::[<$name Array>](inner_value) => Some(inner_value),
                             _ => None
@@ -94,6 +94,14 @@ pub struct BinaryBlock(pub Vec<u8>);
 pub struct Time(pub i32);
 
 impl Time {
+    pub fn from_seconds(seconds: f32) -> Option<Self> {
+        let tenths_of_milliseconds = (seconds * 10000.0 + 0.5).floor();
+        if tenths_of_milliseconds > i32::MAX as f32 || tenths_of_milliseconds < i32::MIN as f32 {
+            return None;
+        }
+        Some(Time(tenths_of_milliseconds as i32))
+    }
+
     pub fn as_seconds(&self) -> f32 {
         self.0 as f32 / 10000.0
     }
@@ -450,8 +458,12 @@ impl Attribute {
         self.0.borrow().attribute_type()
     }
 
-    pub fn get_inner(&self) -> Ref<'_, AttributeValue> {
+    pub fn get_inner_value(&self) -> Ref<'_, AttributeValue> {
         self.0.borrow()
+    }
+
+    pub fn get_inner_value_mut(&self) -> RefMut<'_, AttributeValue> {
+        self.0.borrow_mut()
     }
 }
 
@@ -466,9 +478,9 @@ pub trait AttributeInfo: Default {
         Attribute::new(self.into_attribute_type())
     }
     /// Gets the inner values of a attribute if its the correct attribute type.
-    fn get_inner(attribute: &AttributeValue) -> Option<&Self>;
+    fn get_attribute_value(attribute: &AttributeValue) -> Option<&Self>;
     /// Gets the inner values as mutably of a attribute if its the correct attribute type.
-    fn get_inner_mut(attribute: &mut AttributeValue) -> Option<&mut Self>;
+    fn get_attribute_value_mut(attribute: &mut AttributeValue) -> Option<&mut Self>;
 }
 
 #[derive(Clone)]
@@ -500,15 +512,15 @@ impl<A: AttributeInfo> AttributeVariable<A> {
     }
 
     pub fn get(&self) -> Ref<'_, A> {
-        Ref::map(self.attribute.0.borrow(), |inner| A::get_inner(inner).unwrap())
+        Ref::map(self.attribute.0.borrow(), |inner| A::get_attribute_value(inner).unwrap())
     }
 
     pub fn get_mut(&self) -> RefMut<'_, A> {
-        RefMut::map(self.attribute.0.borrow_mut(), |inner| A::get_inner_mut(inner).unwrap())
+        RefMut::map(self.attribute.0.borrow_mut(), |inner| A::get_attribute_value_mut(inner).unwrap())
     }
 
     pub fn set(&mut self, value: A) {
-        *A::get_inner_mut(&mut self.attribute.0.borrow_mut()).unwrap() = value;
+        *A::get_attribute_value_mut(&mut self.attribute.0.borrow_mut()).unwrap() = value;
     }
 
     pub fn owner(&self) -> Element {
@@ -549,19 +561,19 @@ impl<E: ElementClass> AttributeElement<E> {
     }
 
     pub fn get(&self) -> Option<E> {
-        Ref::map(self.attribute.0.borrow(), |inner| Option::<Element>::get_inner(inner).unwrap())
+        Ref::map(self.attribute.0.borrow(), |inner| Option::<Element>::get_attribute_value(inner).unwrap())
             .as_ref()
             .map(|e| E::from_element(Element::clone(e)))
     }
 
     pub fn get_as<C: ElementClass>(&self) -> Option<C> {
-        Ref::map(self.attribute.0.borrow(), |inner| Option::<Element>::get_inner(inner).unwrap())
+        Ref::map(self.attribute.0.borrow(), |inner| Option::<Element>::get_attribute_value(inner).unwrap())
             .as_ref()
             .map(|e| C::from_element(Element::clone(e)))
     }
 
     pub fn set<C: ElementClass>(&mut self, value: Option<C>) {
-        *Option::<Element>::get_inner_mut(&mut self.attribute.0.borrow_mut()).unwrap() = value.map(|e| e.into_element());
+        *Option::<Element>::get_attribute_value_mut(&mut self.attribute.0.borrow_mut()).unwrap() = value.map(|e| e.into_element());
     }
 
     pub fn owner(&self) -> Element {
@@ -606,30 +618,31 @@ impl<E: ElementClass> AttributeElementArray<E> {
     }
 
     pub fn get<C: ElementClass>(&self) -> Vec<Option<C>> {
-        Ref::map(self.attribute.0.borrow(), |inner| Vec::<Option<Element>>::get_inner(inner).unwrap())
+        Ref::map(self.attribute.0.borrow(), |inner| Vec::<Option<Element>>::get_attribute_value(inner).unwrap())
             .iter()
             .map(|a| a.as_ref().map(|e| C::from_element(Element::clone(e))))
             .collect()
     }
 
     pub fn set<C: ElementClass>(&self, value: Vec<Option<C>>) {
-        *Vec::<Option<Element>>::get_inner_mut(&mut self.attribute.0.borrow_mut()).unwrap() = value.into_iter().map(|a| a.map(|e| e.into_element())).collect()
+        *Vec::<Option<Element>>::get_attribute_value_mut(&mut self.attribute.0.borrow_mut()).unwrap() =
+            value.into_iter().map(|a| a.map(|e| e.into_element())).collect()
     }
 
     pub fn get_index<C: ElementClass>(&self, index: usize) -> Option<C> {
-        Ref::map(self.attribute.0.borrow(), |inner| Vec::<Option<Element>>::get_inner(inner).unwrap())
+        Ref::map(self.attribute.0.borrow(), |inner| Vec::<Option<Element>>::get_attribute_value(inner).unwrap())
             .get(index)
             .and_then(|a| a.as_ref().map(|e| C::from_element(Element::clone(e))))
     }
 
     pub fn push<C: ElementClass>(&mut self, value: Option<C>) {
-        Vec::<Option<Element>>::get_inner_mut(&mut self.attribute.0.borrow_mut())
+        Vec::<Option<Element>>::get_attribute_value_mut(&mut self.attribute.0.borrow_mut())
             .unwrap()
             .push(value.map(|e| e.into_element()));
     }
 
     pub fn insert<C: ElementClass>(&mut self, index: usize, value: Option<C>) {
-        Vec::<Option<Element>>::get_inner_mut(&mut self.attribute.0.borrow_mut())
+        Vec::<Option<Element>>::get_attribute_value_mut(&mut self.attribute.0.borrow_mut())
             .unwrap()
             .insert(index, value.map(|e| e.into_element()));
     }

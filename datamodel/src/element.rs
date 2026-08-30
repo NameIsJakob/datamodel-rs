@@ -1,7 +1,7 @@
-use crate::attribute::{Attribute, AttributeValue};
+use crate::attribute::{Attribute, AttributeInfo, AttributeValue};
 use indexmap::IndexMap;
 use std::{
-    cell::{Ref, RefCell},
+    cell::{Ref, RefCell, RefMut},
     rc::Rc,
 };
 use uuid::Uuid as UUID;
@@ -52,7 +52,7 @@ impl std::fmt::Debug for Element {
         writeln!(f, "Element {} {} {{", internal.class, internal.id)?;
 
         for (attribute_name, attribute) in &internal.attributes {
-            let attribute_value = match &*attribute.get_inner() {
+            let attribute_value = match &*attribute.get_inner_value() {
                 AttributeValue::Element(element) => {
                     if let Some(element_value) = element {
                         format!("Element(Some({:?}))", element_value.0.borrow().id)
@@ -142,6 +142,32 @@ impl Element {
         element_data.id = id;
     }
 
+    /// Gets the attribute value from the element.
+    pub fn get_value<T: AttributeInfo>(&self, name: impl AsRef<str>) -> Option<Ref<'_, T>> {
+        // SAFETY: We want to borrow the attribute and not the element and the attribute will not be null.
+        let internals = unsafe { self.0.as_ptr().as_ref_unchecked() };
+        let attribute_name = name.as_ref();
+        let attribute = internals.attributes.get(attribute_name)?;
+        let attribute_value = attribute.get_inner_value();
+        Ref::filter_map(attribute_value, |value| T::get_attribute_value(value)).ok()
+    }
+
+    /// Gets the mutable attribute value from the element.
+    pub fn get_value_mut<T: AttributeInfo>(&self, name: impl AsRef<str>) -> Option<RefMut<'_, T>> {
+        // SAFETY: We want to borrow the attribute and not the element and the attribute will not be null.
+        let internals = unsafe { self.0.as_ptr().as_ref_unchecked() };
+        let attribute_name = name.as_ref();
+        let attribute = internals.attributes.get(attribute_name)?;
+        let attribute_value = attribute.get_inner_value_mut();
+        RefMut::filter_map(attribute_value, |value| T::get_attribute_value_mut(value)).ok()
+    }
+
+    /// Sets an element attribute with a value.
+    pub fn set_value(&mut self, name: impl Into<String>, value: impl AttributeInfo) {
+        let attribute_name = name.into();
+        self.0.borrow_mut().attributes.insert(attribute_name, value.into_attribute());
+    }
+
     /// Gets the [Attribute] stored in the element by the name.
     pub fn get_attribute(&self, name: impl AsRef<str>) -> Option<Attribute> {
         let attribute_name = name.as_ref();
@@ -171,6 +197,10 @@ impl Element {
     pub fn reserve_attributes(&mut self, additional: usize) {
         let mut element_data = self.0.borrow_mut();
         element_data.attributes.reserve(additional);
+    }
+
+    pub fn set_attributes(&mut self, attributes: IndexMap<String, Attribute>) {
+        self.0.borrow_mut().attributes = attributes;
     }
 }
 

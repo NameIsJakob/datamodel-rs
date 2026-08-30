@@ -11,6 +11,7 @@ categories = ["parser-implementations"]
 readme = "../README.md"
 
 [dependencies]
+const_format = { version = "0.2.36", default-features = false }
 datamodel-derive = { version = "0.1.0", path = "../datamodel-derive", optional = true }
 indexmap = { version = "2.13.0", default-features = false, features = ["std"] }
 mint = { version = "0.5.9", default-features = false, optional = true }
