@@ -1,9 +1,11 @@
-use crate::attribute::{Attribute, AttributeInfo, AttributeValue};
+use crate::attribute::{Attribute, AttributeInfo, AttributeType, AttributeValue};
 use indexmap::IndexMap;
 use std::{
     cell::{Ref, RefCell, RefMut},
+    marker::PhantomData,
     rc::Rc,
 };
+use thiserror::Error as ThisError;
 use uuid::Uuid as UUID;
 
 struct ElementInternal {
@@ -19,43 +21,30 @@ struct ElementInternal {
 /// # Panics
 /// Borrowing rules from [RefCell] apply:
 /// operations may panic if runtime borrow rules are violated
-#[derive(Clone)]
-pub struct Element(Rc<RefCell<ElementInternal>>);
+pub struct Element<Class: ElementClass = ()> {
+    inner: Rc<RefCell<ElementInternal>>,
+    class_marker: PhantomData<Class>,
+}
 
-impl Default for Element {
-    fn default() -> Self {
-        Self(Rc::new(RefCell::new(ElementInternal {
-            class: String::from(Element::class_name()),
-            id: UUID::new_v4(),
-            attributes: IndexMap::new(),
-        })))
+impl<Class: ElementClass> Clone for Element<Class> {
+    fn clone(&self) -> Self {
+        Self {
+            inner: self.inner.clone(),
+            class_marker: self.class_marker,
+        }
     }
 }
 
-impl PartialEq for Element {
-    fn eq(&self, other: &Self) -> bool {
-        self.0.borrow().id == other.0.borrow().id
-    }
-}
-
-impl Eq for Element {}
-
-impl std::hash::Hash for Element {
-    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
-        self.0.borrow().id.hash(state);
-    }
-}
-
-impl std::fmt::Debug for Element {
+impl<Class: ElementClass> std::fmt::Debug for Element<Class> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        let internal = self.0.borrow();
+        let internal = self.inner.borrow();
         writeln!(f, "Element {} {} {{", internal.class, internal.id)?;
 
         for (attribute_name, attribute) in &internal.attributes {
-            let attribute_value = match &*attribute.get_inner_value() {
+            let attribute_value = match attribute.get_inner_value() {
                 AttributeValue::Element(element) => {
                     if let Some(element_value) = element {
-                        format!("Element(Some({:?}))", element_value.0.borrow().id)
+                        format!("Element(Some({:?}))", element_value.inner.borrow().id)
                     } else {
                         String::from("Element(None)")
                     }
@@ -64,7 +53,7 @@ impl std::fmt::Debug for Element {
                     let mut element_values = Vec::with_capacity(elements.len());
                     for element in elements {
                         if let Some(element_value) = element {
-                            element_values.push(format!("Some({:?})", element_value.0.borrow().id));
+                            element_values.push(format!("Some({:?})", element_value.inner.borrow().id));
                         } else {
                             element_values.push(String::from("None"));
                         }
@@ -80,141 +69,282 @@ impl std::fmt::Debug for Element {
     }
 }
 
-impl ElementClass for Element {
-    fn class_name() -> &'static str {
-        "DmElement"
-    }
-
-    fn from_element(element: Element) -> Self {
-        element
-    }
-
-    fn into_element(self) -> Element {
-        self
+impl<Class: ElementClass> Default for Element<Class> {
+    fn default() -> Self {
+        Self {
+            inner: Rc::new(RefCell::new(ElementInternal {
+                class: String::from(Element::class_name()),
+                id: UUID::new_v4(),
+                attributes: IndexMap::new(),
+            })),
+            class_marker: Default::default(),
+        }
     }
 }
 
-impl Element {
-    /// Creates a empty element with specified class.
-    pub fn new(class: impl Into<String>) -> Self {
-        Self(Rc::new(RefCell::new(ElementInternal {
-            class: class.into(),
-            id: UUID::new_v4(),
-            attributes: IndexMap::new(),
-        })))
+impl<Class: ElementClass> Eq for Element<Class> {}
+
+impl<Class: ElementClass> std::hash::Hash for Element<Class> {
+    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+        self.inner.borrow().id.hash(state);
+    }
+}
+
+impl<Class: ElementClass> PartialEq for Element<Class> {
+    fn eq(&self, other: &Self) -> bool {
+        self.inner.borrow().id == other.inner.borrow().id
+    }
+}
+
+impl<Class: ElementClass> Element<Class> {
+    pub fn new() -> Self {
+        Self {
+            inner: Rc::new(RefCell::new(ElementInternal {
+                class: Class::class_name().to_owned(),
+                id: UUID::new_v4(),
+                attributes: IndexMap::new(),
+            })),
+            class_marker: Default::default(),
+        }
     }
 
-    /// Creates a empty element with a specified class and UUID.
     pub fn full(class: impl Into<String>, id: UUID) -> Self {
-        Self(Rc::new(RefCell::new(ElementInternal {
-            class: class.into(),
-            id,
-            attributes: IndexMap::new(),
-        })))
+        Self {
+            inner: Rc::new(RefCell::new(ElementInternal {
+                class: class.into(),
+                id,
+                attributes: IndexMap::new(),
+            })),
+            class_marker: Default::default(),
+        }
     }
 
-    /// Gets the class of the element.
-    pub fn get_class(&'_ self) -> Ref<'_, String> {
-        let element_data = self.0.borrow();
-        Ref::map(element_data, |element| &element.class)
+    pub fn convert<N: ElementClass>(self) -> Element<N> {
+        Element::<N> {
+            inner: self.inner,
+            class_marker: Default::default(),
+        }
     }
 
-    /// Sets the class of the element to the class of the [ElementClass].
+    pub fn cast<N: ElementClass>(&self) -> &Element<N> {
+        // SAFETY: The size of the Element does not change.
+        unsafe { std::mem::transmute(self) }
+    }
+}
+
+#[derive(Debug, ThisError)]
+pub enum ElementError {
+    #[error("Borrow Error: {0}")]
+    BorrowingError(#[from] std::cell::BorrowError),
+    #[error("Borrow Mut Error: {0}")]
+    BorrowingMutError(#[from] std::cell::BorrowMutError),
+    #[error("Attribute {attribute_name} Does Not Exist")]
+    NonExistingAttribute { attribute_name: String },
+    #[error("Attribute {attribute_name} Is Not Type {attribute_type:?}")]
+    WrongAttributeType { attribute_name: String, attribute_type: AttributeType },
+}
+
+impl<Class: ElementClass> Element<Class> {
+    pub fn get_class(&self) -> Ref<'_, String> {
+        Ref::map(self.inner.borrow(), |internals| &internals.class)
+    }
+
+    pub fn try_get_class(&self) -> Result<Ref<'_, String>, ElementError> {
+        Ok(Ref::map(self.inner.try_borrow()?, |internals| &internals.class))
+    }
+
+    pub fn set_class_name(&mut self, class: impl Into<String>) {
+        let mut internals = self.inner.borrow_mut();
+        internals.class = class.into();
+    }
+
     pub fn set_class<E: ElementClass>(&mut self) {
         self.set_class_name(E::class_name());
     }
 
-    /// Sets the class of the element with a string.
-    pub fn set_class_name(&mut self, class: impl Into<String>) {
-        let mut element_data = self.0.borrow_mut();
-        element_data.class = class.into();
+    pub fn try_set_class_name(&mut self, class: impl Into<String>) -> Result<(), ElementError> {
+        let mut internals = self.inner.try_borrow_mut()?;
+        internals.class = class.into();
+        Ok(())
     }
 
-    /// Gets the UUID identifier of the element.
-    pub fn get_id(&'_ self) -> Ref<'_, UUID> {
-        let element_data = self.0.borrow();
-        Ref::map(element_data, |element| &element.id)
+    pub fn try_set_class<E: ElementClass>(&mut self) -> Result<(), ElementError> {
+        self.try_set_class_name(E::class_name())
     }
 
-    /// Sets the UUID identifier of the element.
+    pub fn get_id(&self) -> Ref<'_, UUID> {
+        Ref::map(self.inner.borrow(), |internals| &internals.id)
+    }
+
+    pub fn try_get_id(&self) -> Result<Ref<'_, UUID>, ElementError> {
+        Ok(Ref::map(self.inner.borrow(), |internals| &internals.id))
+    }
+
     pub fn set_id(&mut self, id: UUID) {
-        let mut element_data = self.0.borrow_mut();
-        element_data.id = id;
+        let mut internals = self.inner.borrow_mut();
+        internals.id = id;
     }
 
-    /// Gets the attribute value from the element.
-    pub fn get_value<T: AttributeInfo>(&self, name: impl AsRef<str>) -> Option<Ref<'_, T>> {
-        // SAFETY: We want to borrow the attribute and not the element and the attribute will not be null.
-        let internals = unsafe { self.0.as_ptr().as_ref_unchecked() };
+    pub fn try_set_id(&mut self, id: UUID) -> Result<(), ElementError> {
+        let mut internals = self.inner.try_borrow_mut()?;
+        internals.id = id;
+        Ok(())
+    }
+}
+
+impl<Class: ElementClass> Element<Class> {
+    pub fn get_value<T: AttributeInfo>(&self, name: impl AsRef<str>) -> Result<Ref<'_, T>, ElementError> {
+        let internals = self.inner.try_borrow()?;
         let attribute_name = name.as_ref();
-        let attribute = internals.attributes.get(attribute_name)?;
-        let attribute_value = attribute.get_inner_value();
-        Ref::filter_map(attribute_value, |value| T::get_attribute_value(value)).ok()
+
+        if !internals.attributes.contains_key(attribute_name) {
+            return Err(ElementError::NonExistingAttribute {
+                attribute_name: attribute_name.to_owned(),
+            });
+        }
+
+        Ref::filter_map(internals, |internals| {
+            internals
+                .attributes
+                .get(attribute_name)
+                .and_then(|attribute| T::get_attribute_value(attribute.get_inner_value()))
+        })
+        .map_err(|_| ElementError::WrongAttributeType {
+            attribute_name: attribute_name.to_owned(),
+            attribute_type: T::attribute_type(),
+        })
     }
 
-    /// Gets the mutable attribute value from the element.
-    pub fn get_value_mut<T: AttributeInfo>(&self, name: impl AsRef<str>) -> Option<RefMut<'_, T>> {
-        // SAFETY: We want to borrow the attribute and not the element and the attribute will not be null.
-        let internals = unsafe { self.0.as_ptr().as_ref_unchecked() };
+    pub fn get_value_or<T: AttributeInfo>(&mut self, name: impl AsRef<str>, default: T) -> Ref<'_, T> {
         let attribute_name = name.as_ref();
-        let attribute = internals.attributes.get(attribute_name)?;
-        let attribute_value = attribute.get_inner_value_mut();
-        RefMut::filter_map(attribute_value, |value| T::get_attribute_value_mut(value)).ok()
+        let exists = self.inner.borrow_mut().attributes.contains_key(attribute_name);
+        if !exists {
+            self.set_value(attribute_name.to_owned(), default);
+        }
+        self.get_value(attribute_name).expect("value Was Inserted And Will Exist")
     }
 
-    /// Sets an element attribute with a value.
+    pub fn try_get_value_or<T: AttributeInfo>(&mut self, name: impl AsRef<str>, default: T) -> Result<Ref<'_, T>, ElementError> {
+        let attribute_name = name.as_ref();
+        let exists = self.inner.try_borrow_mut()?.attributes.contains_key(attribute_name);
+        if !exists {
+            self.set_value(attribute_name.to_owned(), default);
+        }
+        self.get_value(attribute_name)
+    }
+
+    pub fn get_value_or_default<T: AttributeInfo>(&mut self, name: impl AsRef<str>) -> Ref<'_, T> {
+        self.get_value_or(name, T::default())
+    }
+
+    pub fn try_get_value_or_default<T: AttributeInfo>(&mut self, name: impl AsRef<str>) -> Result<Ref<'_, T>, ElementError> {
+        self.try_get_value_or(name, T::default())
+    }
+
+    pub fn get_value_mut<T: AttributeInfo>(&mut self, name: impl AsRef<str>) -> Result<RefMut<'_, T>, ElementError> {
+        let internals = self.inner.try_borrow_mut()?;
+        let attribute_name = name.as_ref();
+
+        if !internals.attributes.contains_key(attribute_name) {
+            return Err(ElementError::NonExistingAttribute {
+                attribute_name: attribute_name.to_owned(),
+            });
+        }
+
+        RefMut::filter_map(internals, |internals| {
+            internals
+                .attributes
+                .get_mut(attribute_name)
+                .and_then(|attribute| T::get_attribute_value_mut(attribute.get_inner_value_mut()))
+        })
+        .map_err(|_| ElementError::WrongAttributeType {
+            attribute_name: attribute_name.to_owned(),
+            attribute_type: T::attribute_type(),
+        })
+    }
+
+    pub fn get_value_or_mut<T: AttributeInfo>(&mut self, name: impl AsRef<str>, default: T) -> RefMut<'_, T> {
+        let attribute_name = name.as_ref();
+        let exists = self.inner.borrow_mut().attributes.contains_key(attribute_name);
+        if !exists {
+            self.set_value(attribute_name.to_owned(), default);
+        }
+        self.get_value_mut(attribute_name).expect("value Was Inserted And Will Exist")
+    }
+
+    pub fn try_get_value_or_mut<T: AttributeInfo>(&mut self, name: impl AsRef<str>, default: T) -> Result<RefMut<'_, T>, ElementError> {
+        let attribute_name = name.as_ref();
+        let exists = self.inner.try_borrow_mut()?.attributes.contains_key(attribute_name);
+        if !exists {
+            self.set_value(attribute_name.to_owned(), default);
+        }
+        self.get_value_mut(attribute_name)
+    }
+
+    pub fn get_value_or_default_mut<T: AttributeInfo>(&mut self, name: impl AsRef<str>) -> RefMut<'_, T> {
+        self.get_value_or_mut(name, T::default())
+    }
+
+    pub fn try_get_value_or_default_mut<T: AttributeInfo>(&mut self, name: impl AsRef<str>) -> Result<RefMut<'_, T>, ElementError> {
+        self.try_get_value_or_mut(name, T::default())
+    }
+
     pub fn set_value(&mut self, name: impl Into<String>, value: impl AttributeInfo) {
         let attribute_name = name.into();
-        self.0.borrow_mut().attributes.insert(attribute_name, value.into_attribute());
+        self.inner.borrow_mut().attributes.insert(attribute_name, value.into_attribute());
     }
 
-    /// Gets the [Attribute] stored in the element by the name.
-    pub fn get_attribute(&self, name: impl AsRef<str>) -> Option<Attribute> {
-        let attribute_name = name.as_ref();
-        self.0.borrow().attributes.get(attribute_name).cloned()
+    pub fn try_set_value(&mut self, name: impl Into<String>, value: impl AttributeInfo) -> Result<(), ElementError> {
+        let attribute_name = name.into();
+        self.inner.try_borrow_mut()?.attributes.insert(attribute_name, value.into_attribute());
+        Ok(())
+    }
+}
+
+impl<Class: ElementClass> Element<Class> {
+    pub fn get_attribute(&self, name: impl AsRef<str>) -> Option<Ref<'_, Attribute>> {
+        Ref::filter_map(self.inner.borrow(), |internals| internals.attributes.get(name.as_ref())).ok()
     }
 
-    /// Removes the attribute from the element and returns it.
-    pub fn remove_attribute(&mut self, name: impl AsRef<str>) -> Option<Attribute> {
-        let mut element_data = self.0.borrow_mut();
-        let attribute_name = name.as_ref();
-        element_data.attributes.shift_remove(attribute_name)
-    }
-
-    /// Sets an attribute in the element, if a existing one attribute then its returned.
     pub fn set_attribute(&mut self, name: impl Into<String>, attribute: Attribute) -> Option<Attribute> {
         let attribute_name = name.into();
-        self.0.borrow_mut().attributes.insert(attribute_name, attribute)
+        self.inner.borrow_mut().attributes.insert(attribute_name, attribute)
     }
 
-    /// Returns the reference to all attributes in the element.
+    pub fn remove_attribute(&mut self, name: impl AsRef<str>) -> Option<Attribute> {
+        let mut element_data = self.inner.borrow_mut();
+        element_data.attributes.shift_remove(name.as_ref())
+    }
+
     pub fn get_attributes(&self) -> Ref<'_, IndexMap<String, Attribute>> {
-        let element_data = self.0.borrow();
+        let element_data = self.inner.borrow();
         Ref::map(element_data, |element| &element.attributes)
     }
 
-    /// Reserve capacity for additional more attributes.
     pub fn reserve_attributes(&mut self, additional: usize) {
-        let mut element_data = self.0.borrow_mut();
+        let mut element_data = self.inner.borrow_mut();
         element_data.attributes.reserve(additional);
     }
 
     pub fn set_attributes(&mut self, attributes: IndexMap<String, Attribute>) {
-        self.0.borrow_mut().attributes = attributes;
+        self.inner.borrow_mut().attributes = attributes;
     }
 }
 
 #[cfg(feature = "derive")]
 pub use datamodel_derive::ElementClass;
-/// A trait that allows the conversion of a element to a struct data.
 pub trait ElementClass {
-    /// The class name of the struct.
     fn class_name() -> &'static str;
+}
 
-    /// Converts the element to the struct.
-    fn from_element(element: Element) -> Self;
-    /// Converts the struct to an element.
-    ///
-    /// This should also set the element class to the class name.
-    fn into_element(self) -> Element;
+impl ElementClass for () {
+    fn class_name() -> &'static str {
+        "DmElement"
+    }
+}
+
+impl ElementClass for Element {
+    fn class_name() -> &'static str {
+        <() as ElementClass>::class_name()
+    }
 }

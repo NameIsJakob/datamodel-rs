@@ -129,7 +129,7 @@ impl Serializer for BinarySerializer {
             }
 
             if let Some(element_name_attribute) = element.get_attribute("name") {
-                if let AttributeValue::String(element_name) = &*element_name_attribute.get_inner_value() {
+                if let AttributeValue::String(element_name) = element_name_attribute.get_inner_value() {
                     if version >= VERSION_GLOBAL_STRING_TABLE {
                         writer.write_string_index(element_name, version, &collected_strings)?;
                     } else {
@@ -197,7 +197,7 @@ impl Serializer for BinarySerializer {
                     Ok(())
                 }
 
-                match &*attribute_value.get_inner_value() {
+                match attribute_value.get_inner_value() {
                     AttributeValue::Element(value) => {
                         writer.write_byte(ATTRIBUTE_ELEMENT_ID)?;
                         let element_value = match value {
@@ -794,7 +794,7 @@ fn collect_elements(root: &Element) -> IndexSet<Element> {
 
     while let Some(collecting_element) = collection_stack.pop() {
         for attribute in collecting_element.get_attributes().values() {
-            match &*attribute.get_inner_value() {
+            match attribute.get_inner_value() {
                 AttributeValue::Element(value) => {
                     if let Some(element) = value
                         && collected_elements.insert(Element::clone(element))
@@ -829,7 +829,7 @@ fn collect_strings(collected_elements: &IndexSet<Element>, version: i32) -> Inde
         for (attribute_name, attribute_value) in element.get_attributes().iter() {
             collected_strings.insert(attribute_name.clone());
             if version >= VERSION_GLOBAL_STRING_TABLE
-                && let AttributeValue::String(value) = &*attribute_value.get_inner_value()
+                && let AttributeValue::String(value) = attribute_value.get_inner_value()
             {
                 collected_strings.insert(value.clone());
             }

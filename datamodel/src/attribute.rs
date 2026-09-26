@@ -1,89 +1,9 @@
-use super::element::{Element, ElementClass};
-use std::{
-    cell::{Ref, RefCell, RefMut},
-    marker::PhantomData,
-    rc::Rc,
-};
+use std::mem::transmute;
+
+use crate::ElementClass;
+
+use super::element::Element;
 pub use uuid::Uuid as UUID;
-
-macro_rules! attribute_list {
-    ($($name:ident : $value:ty),* $(,)?) => {
-        paste::paste! {
-            /// A value to specify what type the attribute is.
-            #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-            pub enum AttributeType {
-                $($name,)*
-                $([<$name Array>],)*
-            }
-
-            /// Possible values which the attribute will store.
-            #[derive(Clone, Debug)]
-            pub enum AttributeValue {
-                $($name($value),)*
-                $([<$name Array>](Vec<$value>),)*
-            }
-
-            impl AttributeValue {
-                pub fn attribute_type(&self) -> AttributeType {
-                    match self {
-                        $(AttributeValue::$name(_) => AttributeType::$name,)*
-                        $(AttributeValue::[<$name Array>](_) => AttributeType::[<$name Array>],)*
-                    }
-                }
-            }
-
-            $(
-                impl AttributeInfo for $value {
-                    fn attribute_type() -> AttributeType {
-                        AttributeType::$name
-                    }
-
-                    fn into_attribute_type(self) -> AttributeValue {
-                        AttributeValue::$name(self)
-                    }
-
-                    fn get_attribute_value(attribute: &AttributeValue) -> Option<&Self> {
-                        match attribute {
-                            AttributeValue::$name(inner_value) => Some(inner_value),
-                            _ => None
-                        }
-                    }
-
-                    fn get_attribute_value_mut(attribute: &mut AttributeValue) -> Option<&mut Self> {
-                        match attribute {
-                            AttributeValue::$name(inner_value) => Some(inner_value),
-                            _ => None
-                        }
-                    }
-                }
-
-                impl AttributeInfo for Vec<$value> {
-                    fn attribute_type() -> AttributeType {
-                        AttributeType::[<$name Array>]
-                    }
-
-                    fn into_attribute_type(self) -> AttributeValue {
-                        AttributeValue::[<$name Array>](self)
-                    }
-
-                    fn get_attribute_value(attribute: &AttributeValue) -> Option<&Self> {
-                        match attribute {
-                            AttributeValue::[<$name Array>](inner_value) => Some(inner_value),
-                            _ => None
-                        }
-                    }
-
-                    fn get_attribute_value_mut(attribute: &mut AttributeValue) -> Option<&mut Self> {
-                        match attribute {
-                            AttributeValue::[<$name Array>](inner_value) => Some(inner_value),
-                            _ => None
-                        }
-                    }
-                }
-            )*
-        }
-    };
-}
 
 /// A structure that holds raw binary data.
 #[derive(Debug, Clone, Default)]
@@ -421,7 +341,36 @@ impl mint::IntoMint for Matrix {
     type MintType = mint::RowMatrix4<f32>;
 }
 
-attribute_list! {
+macro_rules! declare_attributes {
+    ($($name:ident : $value:ty),* $(,)?) => {
+        paste::paste! {
+            /// A value to specify what type the attribute is.
+            #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+            pub enum AttributeType {
+                $($name,)*
+                $([<$name Array>],)*
+            }
+
+            /// Possible values which the attribute will store.
+            #[derive(Clone, Debug)]
+            pub enum AttributeValue {
+                $($name($value),)*
+                $([<$name Array>](Vec<$value>),)*
+            }
+
+            impl AttributeValue {
+                pub fn attribute_type(&self) -> AttributeType {
+                    match self {
+                        $(AttributeValue::$name(_) => AttributeType::$name,)*
+                        $(AttributeValue::[<$name Array>](_) => AttributeType::[<$name Array>],)*
+                    }
+                }
+            }
+        }
+    };
+}
+
+declare_attributes! {
     Element: Option<Element>,
     Integer: i32,
     Float: f32,
@@ -441,34 +390,29 @@ attribute_list! {
     UByte: u8,
 }
 
-/// A reference-counted, data that stores a attribute type.
-///
-/// # Panics
-/// Borrowing rules from [RefCell] apply:
-/// operations may panic if runtime borrow rules are violated
 #[derive(Clone, Debug)]
-pub struct Attribute(Rc<RefCell<AttributeValue>>);
+pub struct Attribute(AttributeValue);
 
 impl Attribute {
     pub fn new(value: AttributeValue) -> Self {
-        Self(Rc::new(RefCell::new(value)))
+        Self(value)
     }
 
     pub fn get_type(&self) -> AttributeType {
-        self.0.borrow().attribute_type()
+        self.0.attribute_type()
     }
 
-    pub fn get_inner_value(&self) -> Ref<'_, AttributeValue> {
-        self.0.borrow()
+    pub fn get_inner_value(&self) -> &AttributeValue {
+        &self.0
     }
 
-    pub fn get_inner_value_mut(&self) -> RefMut<'_, AttributeValue> {
-        self.0.borrow_mut()
+    pub fn get_inner_value_mut(&mut self) -> &mut AttributeValue {
+        &mut self.0
     }
 }
 
 /// A trait to implement a type that stores as a attribute value.
-pub trait AttributeInfo: Default {
+pub trait AttributeInfo: Clone + Default {
     /// Returns the attribute type the value stores.
     fn attribute_type() -> AttributeType;
     /// Converts the value into a attribute value.
@@ -483,175 +427,159 @@ pub trait AttributeInfo: Default {
     fn get_attribute_value_mut(attribute: &mut AttributeValue) -> Option<&mut Self>;
 }
 
-#[derive(Clone)]
-pub struct AttributeVariable<A: AttributeInfo> {
-    owner: Element,
-    attribute: Attribute,
-    phantom: PhantomData<A>,
-}
-
-impl<A: AttributeInfo> AttributeVariable<A> {
-    pub fn initialize(owner: Element, attribute_name: &'static str) -> Self {
-        Self::initialize_with(owner, attribute_name, A::default())
+impl<Class: ElementClass> AttributeInfo for Element<Class> {
+    fn attribute_type() -> AttributeType {
+        AttributeType::Element
     }
 
-    pub fn initialize_with(mut owner: Element, attribute_name: &'static str, value: A) -> Self {
-        let attribute = if let Some(owned_attribute) = owner.get_attribute(attribute_name)
-            && owned_attribute.get_type() == A::attribute_type()
-        {
-            owned_attribute
-        } else {
-            value.into_attribute()
-        };
-        owner.set_attribute(attribute_name, Attribute::clone(&attribute));
-        Self {
-            owner,
-            attribute,
-            phantom: PhantomData,
+    fn into_attribute_type(self) -> AttributeValue {
+        AttributeValue::Element(Some(self.convert()))
+    }
+
+    fn get_attribute_value(attribute: &AttributeValue) -> Option<&Self> {
+        match attribute {
+            AttributeValue::Element(element) => {
+                if let Some(element) = element {
+                    Some(element.cast())
+                } else {
+                    None
+                }
+            }
+            _ => None,
         }
     }
 
-    pub fn get(&self) -> Ref<'_, A> {
-        Ref::map(self.attribute.0.borrow(), |inner| A::get_attribute_value(inner).unwrap())
-    }
-
-    pub fn get_mut(&self) -> RefMut<'_, A> {
-        RefMut::map(self.attribute.0.borrow_mut(), |inner| A::get_attribute_value_mut(inner).unwrap())
-    }
-
-    pub fn set(&mut self, value: A) {
-        *A::get_attribute_value_mut(&mut self.attribute.0.borrow_mut()).unwrap() = value;
-    }
-
-    pub fn owner(&self) -> Element {
-        Element::clone(&self.owner)
-    }
-
-    pub fn attribute(&self) -> Attribute {
-        Attribute::clone(&self.attribute)
+    fn get_attribute_value_mut(attribute: &mut AttributeValue) -> Option<&mut Self> {
+        match attribute {
+            AttributeValue::Element(element) => {
+                if let Some(element) = element {
+                    // SAFETY: The size of the Element does not change.
+                    Some(unsafe { std::mem::transmute::<&mut Element, &mut Element<Class>>(element) })
+                } else {
+                    None
+                }
+            }
+            _ => None,
+        }
     }
 }
 
-#[derive(Clone)]
-pub struct AttributeElement<E: ElementClass> {
-    owner: Element,
-    attribute: Attribute,
-    phantom: PhantomData<E>,
-}
-
-impl<E: ElementClass> AttributeElement<E> {
-    pub fn initialize(owner: Element, attribute_name: &'static str) -> Self {
-        Self::initialize_with(owner, attribute_name, None)
+impl<Class: ElementClass> AttributeInfo for Option<Element<Class>> {
+    fn attribute_type() -> AttributeType {
+        AttributeType::Element
     }
 
-    pub fn initialize_with(mut owner: Element, attribute_name: &'static str, value: Option<E>) -> Self {
-        let attribute = if let Some(owned_attribute) = owner.get_attribute(attribute_name)
-            && owned_attribute.get_type() == AttributeType::Element
-        {
-            owned_attribute
-        } else {
-            value.map(|e| e.into_element()).into_attribute()
-        };
-        owner.set_attribute(attribute_name, Attribute::clone(&attribute));
-        Self {
-            owner,
-            attribute,
-            phantom: PhantomData,
+    fn into_attribute_type(self) -> AttributeValue {
+        AttributeValue::Element(self.map(|element| element.convert()))
+    }
+
+    fn get_attribute_value(attribute: &AttributeValue) -> Option<&Self> {
+        match attribute {
+            // SAFETY: The size of the Element does not change.
+            AttributeValue::Element(element) => Some(unsafe { transmute::<&Option<Element>, &Option<Element<Class>>>(element) }),
+            _ => None,
         }
     }
 
-    pub fn get(&self) -> Option<E> {
-        Ref::map(self.attribute.0.borrow(), |inner| Option::<Element>::get_attribute_value(inner).unwrap())
-            .as_ref()
-            .map(|e| E::from_element(Element::clone(e)))
-    }
-
-    pub fn get_as<C: ElementClass>(&self) -> Option<C> {
-        Ref::map(self.attribute.0.borrow(), |inner| Option::<Element>::get_attribute_value(inner).unwrap())
-            .as_ref()
-            .map(|e| C::from_element(Element::clone(e)))
-    }
-
-    pub fn set<C: ElementClass>(&mut self, value: Option<C>) {
-        *Option::<Element>::get_attribute_value_mut(&mut self.attribute.0.borrow_mut()).unwrap() = value.map(|e| e.into_element());
-    }
-
-    pub fn owner(&self) -> Element {
-        Element::clone(&self.owner)
-    }
-
-    pub fn attribute(&self) -> Attribute {
-        Attribute::clone(&self.attribute)
+    fn get_attribute_value_mut(attribute: &mut AttributeValue) -> Option<&mut Self> {
+        match attribute {
+            // SAFETY: The size of the Element does not change.
+            AttributeValue::Element(element) => Some(unsafe { transmute::<&mut Option<Element>, &mut Option<Element<Class>>>(element) }),
+            _ => None,
+        }
     }
 }
 
-#[derive(Clone)]
-pub struct AttributeElementArray<E: ElementClass> {
-    owner: Element,
-    attribute: Attribute,
-    phantom: PhantomData<E>,
-}
-
-impl<E: ElementClass> AttributeElementArray<E> {
-    pub fn initialize(owner: Element, attribute_name: &'static str) -> Self {
-        Self::initialize_with(owner, attribute_name, Vec::new())
+impl<Class: ElementClass> AttributeInfo for Vec<Option<Element<Class>>> {
+    fn attribute_type() -> AttributeType {
+        AttributeType::ElementArray
     }
 
-    pub fn initialize_with(mut owner: Element, attribute_name: &'static str, value: Vec<Option<E>>) -> Self {
-        let attribute = if let Some(owned_attribute) = owner.get_attribute(attribute_name)
-            && owned_attribute.get_type() == AttributeType::ElementArray
-        {
-            owned_attribute
-        } else {
-            value
-                .into_iter()
-                .map(|a| a.map(|e| e.into_element()))
-                .collect::<Vec<Option<Element>>>()
-                .into_attribute()
-        };
-        owner.set_attribute(attribute_name, Attribute::clone(&attribute));
-        Self {
-            owner,
-            attribute,
-            phantom: PhantomData,
+    fn into_attribute_type(self) -> AttributeValue {
+        AttributeValue::ElementArray(unsafe { transmute::<Vec<Option<Element<Class>>>, Vec<Option<Element>>>(self) })
+    }
+
+    fn get_attribute_value(attribute: &AttributeValue) -> Option<&Self> {
+        match attribute {
+            // SAFETY: The size of the Element does not change.
+            AttributeValue::ElementArray(element) => Some(unsafe { transmute::<&Vec<Option<Element>>, &Vec<Option<Element<Class>>>>(element) }),
+            _ => None,
         }
     }
 
-    pub fn get<C: ElementClass>(&self) -> Vec<Option<C>> {
-        Ref::map(self.attribute.0.borrow(), |inner| Vec::<Option<Element>>::get_attribute_value(inner).unwrap())
-            .iter()
-            .map(|a| a.as_ref().map(|e| C::from_element(Element::clone(e))))
-            .collect()
+    fn get_attribute_value_mut(attribute: &mut AttributeValue) -> Option<&mut Self> {
+        match attribute {
+            // SAFETY: The size of the Element does not change.
+            AttributeValue::ElementArray(element) => Some(unsafe { transmute::<&mut Vec<Option<Element>>, &mut Vec<Option<Element<Class>>>>(element) }),
+            _ => None,
+        }
     }
+}
 
-    pub fn set<C: ElementClass>(&self, value: Vec<Option<C>>) {
-        *Vec::<Option<Element>>::get_attribute_value_mut(&mut self.attribute.0.borrow_mut()).unwrap() =
-            value.into_iter().map(|a| a.map(|e| e.into_element())).collect()
-    }
+macro_rules! define_attributes_info {
+    ($($name:ident : $value:ty),* $(,)?) => {
+        paste::paste! {
+            $(
+                impl AttributeInfo for $value {
+                    fn attribute_type() -> AttributeType {
+                        AttributeType::$name
+                    }
+                    fn into_attribute_type(self) -> AttributeValue {
+                        AttributeValue::$name(self)
+                    }
+                    fn get_attribute_value(attribute: &AttributeValue) -> Option<&Self> {
+                        match attribute {
+                            AttributeValue::$name(inner_value) => Some(inner_value),
+                            _ => None
+                        }
+                    }
+                    fn get_attribute_value_mut(attribute: &mut AttributeValue) -> Option<&mut Self> {
+                        match attribute {
+                            AttributeValue::$name(inner_value) => Some(inner_value),
+                            _ => None
+                        }
+                    }
+                }
+                impl AttributeInfo for Vec<$value> {
+                    fn attribute_type() -> AttributeType {
+                        AttributeType::[<$name Array>]
+                    }
+                    fn into_attribute_type(self) -> AttributeValue {
+                        AttributeValue::[<$name Array>](self)
+                    }
+                    fn get_attribute_value(attribute: &AttributeValue) -> Option<&Self> {
+                        match attribute {
+                            AttributeValue::[<$name Array>](inner_value) => Some(inner_value),
+                            _ => None
+                        }
+                    }
+                    fn get_attribute_value_mut(attribute: &mut AttributeValue) -> Option<&mut Self> {
+                        match attribute {
+                            AttributeValue::[<$name Array>](inner_value) => Some(inner_value),
+                            _ => None
+                        }
+                    }
+                }
+            )*
+        }
+    };
+}
 
-    pub fn get_index<C: ElementClass>(&self, index: usize) -> Option<C> {
-        Ref::map(self.attribute.0.borrow(), |inner| Vec::<Option<Element>>::get_attribute_value(inner).unwrap())
-            .get(index)
-            .and_then(|a| a.as_ref().map(|e| C::from_element(Element::clone(e))))
-    }
-
-    pub fn push<C: ElementClass>(&mut self, value: Option<C>) {
-        Vec::<Option<Element>>::get_attribute_value_mut(&mut self.attribute.0.borrow_mut())
-            .unwrap()
-            .push(value.map(|e| e.into_element()));
-    }
-
-    pub fn insert<C: ElementClass>(&mut self, index: usize, value: Option<C>) {
-        Vec::<Option<Element>>::get_attribute_value_mut(&mut self.attribute.0.borrow_mut())
-            .unwrap()
-            .insert(index, value.map(|e| e.into_element()));
-    }
-
-    pub fn owner(&self) -> Element {
-        Element::clone(&self.owner)
-    }
-
-    pub fn attribute(&self) -> Attribute {
-        Attribute::clone(&self.attribute)
-    }
+define_attributes_info! {
+    Integer: i32,
+    Float: f32,
+    Boolean: bool,
+    String: String,
+    Binary: BinaryBlock,
+    ObjectId: UUID,
+    Time: Time,
+    Color: Color,
+    Vector2: Vector2,
+    Vector3: Vector3,
+    Vector4: Vector4,
+    Angle: Angle,
+    Quaternion: Quaternion,
+    Matrix: Matrix,
+    ULong: u64,
+    UByte: u8,
 }

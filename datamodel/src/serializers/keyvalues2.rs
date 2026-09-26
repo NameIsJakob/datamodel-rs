@@ -285,7 +285,7 @@ fn collect_elements(root: Element, collected_elements: &mut IndexMap<Element, us
     collected_elements.insert(root.clone(), if collected_elements.is_empty() { 1 } else { 0 });
 
     for attribute in root.get_attributes().values() {
-        match &*attribute.get_inner_value() {
+        match attribute.get_inner_value() {
             AttributeValue::Element(element) => match element {
                 Some(existing_element) => {
                     if let Some(count) = collected_elements.get_mut(existing_element) {
@@ -483,7 +483,7 @@ fn write_attributes(
         }
         writer.write("\n")?;
         let formatted_attribute_name = format_escape_characters(attribute_name);
-        match &*attribute.get_inner_value() {
+        match attribute.get_inner_value() {
             AttributeValue::Element(value) => {
                 writer.write_tabs()?;
                 write!(&mut writer.buffer, "\"{formatted_attribute_name}\"")?;
