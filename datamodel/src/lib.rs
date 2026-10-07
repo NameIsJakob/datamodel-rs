@@ -32,9 +32,7 @@
 
 pub mod attribute;
 
-mod element;
-pub use element::Element;
-pub use element::ElementClass;
+pub mod element;
 
 pub mod serializers;
 

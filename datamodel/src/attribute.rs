@@ -1,8 +1,6 @@
 use std::mem::transmute;
 
-use crate::ElementClass;
-
-use super::element::Element;
+use crate::element::{Element, ElementClass};
 pub use uuid::Uuid as UUID;
 
 /// A structure that holds raw binary data.

@@ -1,5 +1,5 @@
 use crate::attribute::{Attribute, AttributeInfo, AttributeType, AttributeValue};
-use indexmap::IndexMap;
+use indexmap::{IndexMap, map::RawEntryApiV1};
 use std::{
     cell::{Ref, RefCell, RefMut},
     marker::PhantomData,
@@ -192,6 +192,292 @@ impl<Class: ElementClass> Element<Class> {
     }
 }
 
+pub enum AttributeEntry<'a, T: AttributeInfo> {
+    Occupied(OccupiedAttributeEntry<'a, T>),
+    Vacant(VacantAttributeEntry<'a, T>),
+}
+
+pub struct OccupiedAttributeEntry<'a, T: AttributeInfo> {
+    owner: &'a Element,
+    key: &'a str,
+    index: usize,
+    type_marker: PhantomData<T>,
+}
+
+pub struct VacantAttributeEntry<'a, T: AttributeInfo> {
+    owner: &'a Element,
+    key: &'a str,
+    type_marker: PhantomData<T>,
+}
+
+impl<'a, T: AttributeInfo> AttributeEntry<'a, T> {
+    fn new(owner: &'a Element, key: &'a str) -> Self {
+        match owner.inner.borrow_mut().attributes.raw_entry_mut_v1().from_key(key) {
+            indexmap::map::raw_entry_v1::RawEntryMut::Occupied(occupied) => AttributeEntry::Occupied(OccupiedAttributeEntry {
+                owner,
+                key,
+                index: occupied.index(),
+                type_marker: PhantomData,
+            }),
+            indexmap::map::raw_entry_v1::RawEntryMut::Vacant(_) => AttributeEntry::Vacant(VacantAttributeEntry {
+                owner,
+                key,
+                type_marker: PhantomData,
+            }),
+        }
+    }
+
+    fn try_new(owner: &'a Element, key: &'a str) -> Result<Self, ElementError> {
+        Ok(match owner.inner.try_borrow_mut()?.attributes.raw_entry_mut_v1().from_key(key) {
+            indexmap::map::raw_entry_v1::RawEntryMut::Occupied(occupied) => AttributeEntry::Occupied(OccupiedAttributeEntry {
+                owner,
+                key,
+                index: occupied.index(),
+                type_marker: PhantomData,
+            }),
+            indexmap::map::raw_entry_v1::RawEntryMut::Vacant(_) => AttributeEntry::Vacant(VacantAttributeEntry {
+                owner,
+                key,
+                type_marker: PhantomData,
+            }),
+        })
+    }
+
+    pub fn index(&self) -> usize {
+        match self {
+            Self::Occupied(entry) => entry.index(),
+            Self::Vacant(entry) => entry.index(),
+        }
+    }
+
+    pub fn try_index(&self) -> Result<usize, ElementError> {
+        match self {
+            Self::Occupied(entry) => Ok(entry.index()),
+            Self::Vacant(entry) => entry.try_index(),
+        }
+    }
+
+    pub fn key(&self) -> &str {
+        match *self {
+            Self::Occupied(ref entry) => entry.key(),
+            Self::Vacant(ref entry) => entry.key(),
+        }
+    }
+
+    pub fn insert_entry(self, value: T) -> OccupiedAttributeEntry<'a, T> {
+        match self {
+            Self::Occupied(mut entry) => {
+                entry.insert(value);
+                entry
+            }
+            Self::Vacant(entry) => entry.insert_entry(value),
+        }
+    }
+
+    pub fn try_insert_entry(self, value: T) -> Result<OccupiedAttributeEntry<'a, T>, ElementError> {
+        match self {
+            Self::Occupied(mut entry) => {
+                entry.try_insert(value)?;
+                Ok(entry)
+            }
+            Self::Vacant(entry) => entry.try_insert_entry(value),
+        }
+    }
+
+    pub fn or_insert(self, default: T) -> RefMut<'a, T> {
+        match self {
+            Self::Occupied(entry) => entry.into_mut(),
+            Self::Vacant(entry) => entry.insert(default),
+        }
+    }
+
+    pub fn try_or_insert(self, default: T) -> Result<RefMut<'a, T>, ElementError> {
+        match self {
+            Self::Occupied(entry) => entry.try_into_mut(),
+            Self::Vacant(entry) => entry.try_insert(default),
+        }
+    }
+
+    pub fn or_insert_with(self, call: impl FnOnce() -> T) -> RefMut<'a, T> {
+        match self {
+            Self::Occupied(entry) => entry.into_mut(),
+            Self::Vacant(entry) => entry.insert(call()),
+        }
+    }
+
+    pub fn try_or_insert_with(self, call: impl FnOnce() -> T) -> Result<RefMut<'a, T>, ElementError> {
+        match self {
+            Self::Occupied(entry) => entry.try_into_mut(),
+            Self::Vacant(entry) => entry.try_insert(call()),
+        }
+    }
+
+    pub fn or_insert_with_key(self, call: impl FnOnce(&str) -> T) -> RefMut<'a, T> {
+        match self {
+            Self::Occupied(entry) => entry.into_mut(),
+            Self::Vacant(entry) => {
+                let value = call(entry.key());
+                entry.insert(value)
+            }
+        }
+    }
+
+    pub fn try_or_insert_with_key(self, call: impl FnOnce(&str) -> T) -> Result<RefMut<'a, T>, ElementError> {
+        match self {
+            Self::Occupied(entry) => entry.try_into_mut(),
+            Self::Vacant(entry) => {
+                let value = call(entry.key());
+                entry.try_insert(value)
+            }
+        }
+    }
+
+    pub fn or_default(self) -> RefMut<'a, T> {
+        match self {
+            Self::Occupied(entry) => entry.into_mut(),
+            Self::Vacant(entry) => entry.insert(T::default()),
+        }
+    }
+
+    pub fn try_or_default(self) -> Result<RefMut<'a, T>, ElementError> {
+        match self {
+            Self::Occupied(entry) => entry.try_into_mut(),
+            Self::Vacant(entry) => entry.try_insert(T::default()),
+        }
+    }
+}
+
+impl<'a, T: AttributeInfo> OccupiedAttributeEntry<'a, T> {
+    pub fn index(&self) -> usize {
+        self.index
+    }
+
+    pub fn key(&self) -> &str {
+        self.key
+    }
+
+    pub fn get_mut(&mut self) -> RefMut<'a, T> {
+        if self.owner.inner.borrow().attributes[self.index].get_type() != T::attribute_type() {
+            self.insert(T::default());
+        }
+        RefMut::map(self.owner.inner.borrow_mut(), |internals| {
+            internals
+                .attributes
+                .get_index_mut(self.index)
+                .map(|(_, attribute)| T::get_attribute_value_mut(attribute.get_inner_value_mut()).expect("attribute should be correct type"))
+                .expect("entry should be exist")
+        })
+    }
+
+    pub fn into_mut(mut self) -> RefMut<'a, T> {
+        if self.owner.inner.borrow().attributes[self.index].get_type() != T::attribute_type() {
+            OccupiedAttributeEntry::insert(&mut self, T::default());
+        }
+        RefMut::map(self.owner.inner.borrow_mut(), |internals| {
+            internals
+                .attributes
+                .get_index_mut(self.index)
+                .map(|(_, attribute)| T::get_attribute_value_mut(attribute.get_inner_value_mut()).expect("attribute should be correct type"))
+                .expect("entry should be exist")
+        })
+    }
+
+    pub fn try_into_mut(self) -> Result<RefMut<'a, T>, ElementError> {
+        if self.owner.inner.borrow().attributes[self.index].get_type() != T::attribute_type() {
+            return Err(ElementError::WrongAttributeType {
+                attribute_name: self.key.to_owned(),
+                attribute_type: T::attribute_type(),
+            });
+        }
+        Ok(RefMut::map(self.owner.inner.try_borrow_mut()?, |internals| {
+            internals
+                .attributes
+                .get_index_mut(self.index)
+                .map(|(_, attribute)| T::get_attribute_value_mut(attribute.get_inner_value_mut()).expect("attribute should be correct type"))
+                .expect("entry should be exist")
+        }))
+    }
+
+    pub fn insert(&mut self, value: T) -> Attribute {
+        self.owner
+            .inner
+            .borrow_mut()
+            .attributes
+            .insert(self.key.to_owned(), value.into_attribute())
+            .expect("entry should be exist")
+    }
+
+    pub fn try_insert(&mut self, value: T) -> Result<Attribute, ElementError> {
+        Ok(self
+            .owner
+            .inner
+            .try_borrow_mut()?
+            .attributes
+            .insert(self.key.to_owned(), value.into_attribute())
+            .expect("entry should be exist"))
+    }
+}
+
+impl<'a, T: AttributeInfo> VacantAttributeEntry<'a, T> {
+    pub fn index(&self) -> usize {
+        self.owner.inner.borrow().attributes.len()
+    }
+
+    pub fn try_index(&self) -> Result<usize, ElementError> {
+        Ok(self.owner.inner.try_borrow()?.attributes.len())
+    }
+
+    pub fn key(&self) -> &str {
+        self.key
+    }
+
+    pub fn insert(self, value: T) -> RefMut<'a, T> {
+        self.owner.inner.borrow_mut().attributes.insert(self.key.to_owned(), value.into_attribute());
+        RefMut::map(self.owner.inner.borrow_mut(), |internals| {
+            internals
+                .attributes
+                .last_mut()
+                .map(|(_, attribute)| T::get_attribute_value_mut(attribute.get_inner_value_mut()).expect("attribute should be correct type"))
+                .expect("entry should be exist")
+        })
+    }
+
+    pub fn try_insert(self, value: T) -> Result<RefMut<'a, T>, ElementError> {
+        self.owner.inner.borrow_mut().attributes.insert(self.key.to_owned(), value.into_attribute());
+        Ok(RefMut::map(self.owner.inner.try_borrow_mut()?, |internals| {
+            internals
+                .attributes
+                .last_mut()
+                .map(|(_, attribute)| T::get_attribute_value_mut(attribute.get_inner_value_mut()).expect("attribute should be correct type"))
+                .expect("entry should be exist")
+        }))
+    }
+
+    pub fn insert_entry(self, value: T) -> OccupiedAttributeEntry<'a, T> {
+        self.owner.inner.borrow_mut().attributes.insert(self.key.to_owned(), value.into_attribute());
+        OccupiedAttributeEntry {
+            owner: self.owner,
+            key: self.key,
+            index: self.owner.inner.borrow().attributes.len(),
+            type_marker: PhantomData,
+        }
+    }
+
+    pub fn try_insert_entry(self, value: T) -> Result<OccupiedAttributeEntry<'a, T>, ElementError> {
+        self.owner
+            .inner
+            .try_borrow_mut()?
+            .attributes
+            .insert(self.key.to_owned(), value.into_attribute());
+        Ok(OccupiedAttributeEntry {
+            owner: self.owner,
+            key: self.key,
+            index: self.owner.inner.borrow().attributes.len(),
+            type_marker: PhantomData,
+        })
+    }
+}
+
 impl<Class: ElementClass> Element<Class> {
     pub fn get_value<T: AttributeInfo>(&self, name: impl AsRef<str>) -> Result<Ref<'_, T>, ElementError> {
         let internals = self.inner.try_borrow()?;
@@ -215,78 +501,12 @@ impl<Class: ElementClass> Element<Class> {
         })
     }
 
-    pub fn get_value_or<T: AttributeInfo>(&mut self, name: impl AsRef<str>, default: T) -> Ref<'_, T> {
-        let attribute_name = name.as_ref();
-        let exists = self.inner.borrow_mut().attributes.contains_key(attribute_name);
-        if !exists {
-            self.set_value(attribute_name.to_owned(), default);
-        }
-        self.get_value(attribute_name).expect("value Was Inserted And Will Exist")
+    pub fn entry<'a, T: AttributeInfo>(&'a mut self, name: &'a str) -> AttributeEntry<'a, T> {
+        AttributeEntry::new(self.cast(), name)
     }
 
-    pub fn try_get_value_or<T: AttributeInfo>(&mut self, name: impl AsRef<str>, default: T) -> Result<Ref<'_, T>, ElementError> {
-        let attribute_name = name.as_ref();
-        let exists = self.inner.try_borrow_mut()?.attributes.contains_key(attribute_name);
-        if !exists {
-            self.set_value(attribute_name.to_owned(), default);
-        }
-        self.get_value(attribute_name)
-    }
-
-    pub fn get_value_or_default<T: AttributeInfo>(&mut self, name: impl AsRef<str>) -> Ref<'_, T> {
-        self.get_value_or(name, T::default())
-    }
-
-    pub fn try_get_value_or_default<T: AttributeInfo>(&mut self, name: impl AsRef<str>) -> Result<Ref<'_, T>, ElementError> {
-        self.try_get_value_or(name, T::default())
-    }
-
-    pub fn get_value_mut<T: AttributeInfo>(&mut self, name: impl AsRef<str>) -> Result<RefMut<'_, T>, ElementError> {
-        let internals = self.inner.try_borrow_mut()?;
-        let attribute_name = name.as_ref();
-
-        if !internals.attributes.contains_key(attribute_name) {
-            return Err(ElementError::NonExistingAttribute {
-                attribute_name: attribute_name.to_owned(),
-            });
-        }
-
-        RefMut::filter_map(internals, |internals| {
-            internals
-                .attributes
-                .get_mut(attribute_name)
-                .and_then(|attribute| T::get_attribute_value_mut(attribute.get_inner_value_mut()))
-        })
-        .map_err(|_| ElementError::WrongAttributeType {
-            attribute_name: attribute_name.to_owned(),
-            attribute_type: T::attribute_type(),
-        })
-    }
-
-    pub fn get_value_or_mut<T: AttributeInfo>(&mut self, name: impl AsRef<str>, default: T) -> RefMut<'_, T> {
-        let attribute_name = name.as_ref();
-        let exists = self.inner.borrow_mut().attributes.contains_key(attribute_name);
-        if !exists {
-            self.set_value(attribute_name.to_owned(), default);
-        }
-        self.get_value_mut(attribute_name).expect("value Was Inserted And Will Exist")
-    }
-
-    pub fn try_get_value_or_mut<T: AttributeInfo>(&mut self, name: impl AsRef<str>, default: T) -> Result<RefMut<'_, T>, ElementError> {
-        let attribute_name = name.as_ref();
-        let exists = self.inner.try_borrow_mut()?.attributes.contains_key(attribute_name);
-        if !exists {
-            self.set_value(attribute_name.to_owned(), default);
-        }
-        self.get_value_mut(attribute_name)
-    }
-
-    pub fn get_value_or_default_mut<T: AttributeInfo>(&mut self, name: impl AsRef<str>) -> RefMut<'_, T> {
-        self.get_value_or_mut(name, T::default())
-    }
-
-    pub fn try_get_value_or_default_mut<T: AttributeInfo>(&mut self, name: impl AsRef<str>) -> Result<RefMut<'_, T>, ElementError> {
-        self.try_get_value_or_mut(name, T::default())
+    pub fn try_entry<'a, T: AttributeInfo>(&'a mut self, name: &'a str) -> Result<AttributeEntry<'a, T>, ElementError> {
+        AttributeEntry::try_new(self.cast(), name)
     }
 
     pub fn set_value(&mut self, name: impl Into<String>, value: impl AttributeInfo) {

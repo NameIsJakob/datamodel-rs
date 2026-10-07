@@ -34,39 +34,29 @@ pub fn element_class_derive(item: proc_macro::TokenStream) -> proc_macro::TokenS
 
         let attribute_name = attribute_config.name.unwrap_or(field_identifier.to_string());
         let attribute_getter = syn::Ident::new(&format!("get_{field_identifier}"), proc_macro2::Span::call_site());
-        let attribute_getter_or = syn::Ident::new(&format!("get_{field_identifier}_or"), proc_macro2::Span::call_site());
-        let attribute_getter_or_default = syn::Ident::new(&format!("get_{field_identifier}_or_default"), proc_macro2::Span::call_site());
-        let attribute_getter_mut = syn::Ident::new(&format!("get_{field_identifier}_mut"), proc_macro2::Span::call_site());
-        let attribute_getter_or_mut = syn::Ident::new(&format!("get_{field_identifier}_or_mut"), proc_macro2::Span::call_site());
-        let attribute_getter_or_default_mut = syn::Ident::new(&format!("get_{field_identifier}_or_default_mut"), proc_macro2::Span::call_site());
+        let attribute_try_getter = syn::Ident::new(&format!("try_get_{field_identifier}"), proc_macro2::Span::call_site());
+        let attribute_entry = syn::Ident::new(&format!("entry_{field_identifier}"), proc_macro2::Span::call_site());
+        let attribute_try_entry = syn::Ident::new(&format!("try_entry_{field_identifier}"), proc_macro2::Span::call_site());
         let attribute_type = field.ty;
         class_interface_attributes.push(quote! {
-            fn #attribute_getter(&self) -> ::core::option::Option<::std::cell::Ref<'_, #attribute_type>>;
-            fn #attribute_getter_or(&mut self, default: #attribute_type) -> ::std::cell::Ref<'_, #attribute_type>;
-            fn #attribute_getter_or_default(&mut self) -> ::std::cell::Ref<'_, #attribute_type>;
-            fn #attribute_getter_mut(&mut self) -> ::core::option::Option<::std::cell::RefMut<'_, #attribute_type>>;
-            fn #attribute_getter_or_mut(&mut self, default: #attribute_type) -> ::std::cell::RefMut<'_, #attribute_type>;
-            fn #attribute_getter_or_default_mut(&mut self) -> ::std::cell::RefMut<'_, #attribute_type>;
+            fn #attribute_getter(&self) -> ::core::option::Option<::std::cell::Ref<'_, #attribute_type>>; // Result<Ref<'_, T>, ElementError>
+            fn #attribute_try_getter(&self) -> ::core::result::Result<::std::cell::Ref<'_, #attribute_type>, #datamodel_name_space::element::ElementError>;
+            fn #attribute_entry(&mut self) -> #datamodel_name_space::element::AttributeEntry<'_, #attribute_type>;
+            fn #attribute_try_entry(&mut self) -> ::core::result::Result<#datamodel_name_space::element::AttributeEntry<'_, #attribute_type>, #datamodel_name_space::element::ElementError>;
         });
 
         class_interface_implementation.push(quote! {
             fn #attribute_getter(&self) -> ::core::option::Option<::std::cell::Ref<'_, #attribute_type>> {
                 self.get_value(#attribute_name).ok()
             }
-            fn #attribute_getter_or(&mut self, default: #attribute_type) -> ::std::cell::Ref<'_, #attribute_type> {
-                self.get_value_or(#attribute_name, default)
+            fn #attribute_try_getter(&self) -> ::core::result::Result<::std::cell::Ref<'_, #attribute_type>, #datamodel_name_space::element::ElementError> {
+                self.get_value(#attribute_name)
             }
-            fn #attribute_getter_or_default(&mut self) -> ::std::cell::Ref<'_, #attribute_type> {
-                self.get_value_or_default(#attribute_name)
+            fn #attribute_entry(&mut self) -> #datamodel_name_space::element::AttributeEntry<'_, #attribute_type> {
+                self.entry(#attribute_name)
             }
-            fn #attribute_getter_mut(&mut self) -> ::core::option::Option<::std::cell::RefMut<'_, #attribute_type>> {
-                self.get_value_mut(#attribute_name).ok()
-            }
-            fn #attribute_getter_or_mut(&mut self, default: #attribute_type) -> ::std::cell::RefMut<'_, #attribute_type> {
-                self.get_value_or_mut(#attribute_name, default)
-            }
-            fn #attribute_getter_or_default_mut(&mut self) -> ::std::cell::RefMut<'_, #attribute_type> {
-                self.get_value_or_default_mut(#attribute_name)
+            fn #attribute_try_entry(&mut self) -> ::core::result::Result<#datamodel_name_space::element::AttributeEntry<'_, #attribute_type>, #datamodel_name_space::element::ElementError> {
+                self.try_entry(#attribute_name)
             }
         });
     }
@@ -74,7 +64,7 @@ pub fn element_class_derive(item: proc_macro::TokenStream) -> proc_macro::TokenS
     let class_interface = syn::Ident::new(&format!("{class_identifier}Interface"), class_identifier.span());
 
     quote! {
-        impl #datamodel_name_space::ElementClass for #class_identifier {
+        impl #datamodel_name_space::element::ElementClass for #class_identifier {
             fn class_name() -> &'static str {
                 #class_name
             }
@@ -84,7 +74,7 @@ pub fn element_class_derive(item: proc_macro::TokenStream) -> proc_macro::TokenS
             #(#class_interface_attributes)*
         }
 
-        impl #class_interface for #datamodel_name_space::Element<#class_identifier> {
+        impl #class_interface for #datamodel_name_space::element::Element<#class_identifier> {
             #(#class_interface_implementation)*
         }
     }

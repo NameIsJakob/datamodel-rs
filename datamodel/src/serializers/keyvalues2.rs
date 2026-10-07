@@ -10,10 +10,11 @@ use indexmap::IndexMap;
 use thiserror::Error as ThisError;
 
 use crate::{
-    Element, ElementClass, Header, Serializer,
+    Header, Serializer,
     attribute::{
         Angle, Attribute, AttributeInfo, AttributeType, AttributeValue, BinaryBlock, Color, Matrix, Quaternion, Time, UUID, Vector2, Vector3, Vector4,
     },
+    element::{Element, ElementClass},
 };
 
 /// An error returned by [KeyValues2Serializer] and [KeyValues2FlatSerializer] from serializing or deserializing.
